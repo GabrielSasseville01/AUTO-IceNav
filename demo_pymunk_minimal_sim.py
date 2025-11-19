@@ -25,16 +25,16 @@ if __name__ == '__main__':
     print('Launching pymunk minimal ship-ice sim demo...')
 
     # size of map/environment
-    length, width = 200, 80  # m
+    length, width = 200, 200  # m
 
     # ship params
     ship_pose = (width / 2, -40, np.pi / 2)  # ship starting position and heading
-    ship_vel = 2                             # ship speed m/s
+    ship_vel = 10                             # ship speed m/s
     ship_vertices = np.asarray(FULL_SCALE_PSV_VERTICES)
 
     # obstacle params
     obs_params = dict(
-        num_obs=200,  # number of random ice obstacles
+        num_obs=1000,  # number of random ice obstacles
         min_r=4,  # max and min radii of obstacles
         max_r=20,
         min_x=0,  # max and min x position of obs

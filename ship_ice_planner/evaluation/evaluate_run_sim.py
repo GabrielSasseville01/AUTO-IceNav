@@ -391,6 +391,219 @@ def control_vs_time_plot(sim_data, dim_U, control_labels, save_fig=None):
 
     if save_fig:
         f.savefig(save_fig, dpi=300)
+
+
+def fracturing_stats_plot(fracture_history, save_fig=None):
+    """
+    Plot statistics about ice fracturing events.
+    
+    Args:
+        fracture_history: List of dicts with keys: 'time', 'x', 'y', 'impulse', 'num_pieces', 'num_floes'
+        save_fig: Path to save figure, or None to show
+    """
+    if not fracture_history or len(fracture_history) == 0:
+        if save_fig:
+            print(f'No fracturing events occurred, skipping fracturing plot (would save to: {save_fig})')
+        return
+    
+    # Convert to arrays for easier plotting
+    times = [f['time'] for f in fracture_history]
+    x_locs = [f['x'] for f in fracture_history]
+    y_locs = [f['y'] for f in fracture_history]
+    impulses = [f['impulse'] for f in fracture_history]
+    num_pieces = [f['num_pieces'] for f in fracture_history]
+    num_floes = [f['num_floes'] for f in fracture_history]
+    
+    f, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Plot 1: Fracture locations on map
+    ax = axes[0, 0]
+    scatter = ax.scatter(x_locs, y_locs, c=impulses, s=100, alpha=0.6, cmap='viridis')
+    ax.set_xlabel('X position (m)')
+    ax.set_ylabel('Y position (m)')
+    ax.set_title(f'Fracture Locations (Total: {len(fracture_history)})')
+    ax.grid(True, alpha=0.3)
+    plt.colorbar(scatter, ax=ax, label='Impulse (N·s)')
+    ax.set_aspect('equal', adjustable='box')
+    
+    # Plot 2: Number of fractures over time (cumulative)
+    ax = axes[0, 1]
+    ax.plot(times, np.arange(1, len(times) + 1), 'b-', linewidth=2)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Cumulative Fractures')
+    ax.set_title('Cumulative Fracture Count')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 3: Number of ice floes over time
+    ax = axes[1, 0]
+    ax.plot(times, num_floes, 'g-', linewidth=2, marker='o', markersize=4)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Number of Ice Floes')
+    ax.set_title('Ice Floe Count Over Time')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 4: Impulse magnitude at fracture events
+    ax = axes[1, 1]
+    ax.bar(range(len(impulses)), impulses, alpha=0.7, color='coral')
+    ax.set_xlabel('Fracture Event')
+    ax.set_ylabel('Impulse (N·s)')
+    ax.set_title(f'Impulse at Fracture Events\n(Mean: {np.mean(impulses):.2e}, Max: {np.max(impulses):.2e})')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Add text box with summary stats
+    summary_text = (
+        f'Total Fractures: {len(fracture_history)}\n'
+        f'Mean Pieces per Fracture: {np.mean(num_pieces):.1f}\n'
+        f'Final Floe Count: {num_floes[-1] if num_floes else 0}\n'
+        f'Mean Impulse: {np.mean(impulses):.2e} N·s'
+    )
+    f.text(0.02, 0.02, summary_text, fontsize=9,
+           verticalalignment='bottom', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    f.tight_layout()
+    
+    if save_fig:
+        try:
+            f.savefig(save_fig, dpi=300)
+            print(f'✓ Saved fracturing plot to: {save_fig}')
+        except Exception as e:
+            print(f'✗ Error saving fracturing plot to {save_fig}: {e}')
+        finally:
+            plt.close(f)
+
+
+def ridging_stats_plot(ridge_history, ridge_thickness_history, ridge_resistance_history, save_fig=None):
+    """
+    Plot statistics about ice ridging events.
+    
+    Args:
+        ridge_history: List of dicts with keys: 'time', 'x', 'y', 'direction'
+        ridge_thickness_history: List of dicts with keys: 'time', 'thickness' (list per ridge), 'num_ridges'
+        ridge_resistance_history: List of dicts with keys: 'time', 'resistance'
+        save_fig: Path to save figure, or None to show
+    """
+    if not ridge_history or len(ridge_history) == 0:
+        if save_fig:
+            print(f'No ridging events occurred, skipping ridging plot (would save to: {save_fig})')
+        return
+    
+    f, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # Plot 1: Ridge locations on map
+    ax = axes[0, 0]
+    x_locs = [r['x'] for r in ridge_history]
+    y_locs = [r['y'] for r in ridge_history]
+    directions = [r['direction'] for r in ridge_history]
+    
+    # Plot ridge centers
+    ax.scatter(x_locs, y_locs, s=200, alpha=0.6, c='red', marker='s', label='Ridge Centers')
+    
+    # Draw ridge orientation (rectangles)
+    for i, (x, y, direction) in enumerate(zip(x_locs, y_locs, directions)):
+        # Draw a small rectangle to show orientation
+        width, length = 20.0, 30.0  # Default ridge dimensions
+        cos_dir = np.cos(direction)
+        sin_dir = np.sin(direction)
+        corners = np.array([
+            [-width/2, -length/2],
+            [width/2, -length/2],
+            [width/2, length/2],
+            [-width/2, length/2]
+        ])
+        # Rotate corners
+        R = np.array([[cos_dir, -sin_dir], [sin_dir, cos_dir]])
+        corners_rotated = corners @ R.T
+        corners_rotated += np.array([x, y])
+        corners_rotated = np.vstack([corners_rotated, corners_rotated[0]])  # Close polygon
+        ax.plot(corners_rotated[:, 0], corners_rotated[:, 1], 'r--', alpha=0.3, linewidth=1)
+    
+    ax.set_xlabel('X position (m)')
+    ax.set_ylabel('Y position (m)')
+    ax.set_title(f'Ridge Zone Locations (Total: {len(ridge_history)})')
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+    ax.set_aspect('equal', adjustable='box')
+    
+    # Plot 2: Number of ridges over time (cumulative)
+    ax = axes[0, 1]
+    ridge_times = [r['time'] for r in ridge_history]
+    ax.plot(ridge_times, np.arange(1, len(ridge_times) + 1), 'r-', linewidth=2, marker='o', markersize=4)
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Cumulative Ridges')
+    ax.set_title('Cumulative Ridge Count')
+    ax.grid(True, alpha=0.3)
+    
+    # Plot 3: Ridge thickness over time
+    ax = axes[1, 0]
+    if ridge_thickness_history:
+        thickness_times = [h['time'] for h in ridge_thickness_history]
+        num_ridges = [h['num_ridges'] for h in ridge_thickness_history]
+        
+        # Plot average thickness if available
+        if 'thickness' in ridge_thickness_history[0] and len(ridge_thickness_history[0]['thickness']) > 0:
+            avg_thickness = [np.mean(h['thickness']) if len(h['thickness']) > 0 else 0 
+                            for h in ridge_thickness_history]
+            ax.plot(thickness_times, avg_thickness, 'b-', linewidth=2, label='Average Thickness')
+            if len(avg_thickness) > 0:
+                ax.axhline(y=np.mean(avg_thickness), color='b', linestyle='--', alpha=0.5, 
+                          label=f'Mean: {np.mean(avg_thickness):.2f} m')
+        
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Ridge Thickness (m)')
+        ax.set_title('Ridge Thickness Over Time')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+    else:
+        ax.text(0.5, 0.5, 'No thickness data', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Ridge Thickness Over Time')
+    
+    # Plot 4: Ridge resistance over time
+    ax = axes[1, 1]
+    resistances = []
+    if ridge_resistance_history:
+        resistance_times = [h['time'] for h in ridge_resistance_history]
+        resistances = [h['resistance'] for h in ridge_resistance_history]
+        ax.plot(resistance_times, resistances, 'orange', linewidth=2, label='Total Ridge Resistance')
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('Resistance Force (N)')
+        ax.set_title('Ridge Resistance Over Time')
+        if len(resistances) > 0 and np.max(resistances) > 0:
+            ax.axhline(y=np.mean(resistances), color='orange', linestyle='--', alpha=0.5,
+                      label=f'Mean: {np.mean(resistances):.1f} N')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+    else:
+        ax.text(0.5, 0.5, 'No resistance data', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Ridge Resistance Over Time')
+    
+    # Add text box with summary stats
+    max_thickness = 0.0
+    if ridge_thickness_history and len(ridge_thickness_history) > 0:
+        if 'thickness' in ridge_thickness_history[0] and len(ridge_thickness_history[0]['thickness']) > 0:
+            all_thicknesses = [t for h in ridge_thickness_history if 'thickness' in h for t in h['thickness']]
+            if all_thicknesses:
+                max_thickness = np.max(all_thicknesses)
+    
+    mean_resistance = np.mean(resistances) if len(resistances) > 0 else 0.0
+    
+    summary_text = (
+        f'Total Ridges Created: {len(ridge_history)}\n'
+        f'Max Thickness: {max_thickness:.2f} m\n'
+        f'Mean Resistance: {mean_resistance:.1f} N'
+    )
+    f.text(0.02, 0.02, summary_text, fontsize=9,
+           verticalalignment='bottom', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    f.tight_layout()
+    
+    if save_fig:
+        try:
+            f.savefig(save_fig, dpi=300)
+            print(f'✓ Saved ridging plot to: {save_fig}')
+        except Exception as e:
+            print(f'✗ Error saving ridging plot to {save_fig}: {e}')
+        finally:
+            plt.close(f)
 # ------------------------------------------------------- #
 
 
