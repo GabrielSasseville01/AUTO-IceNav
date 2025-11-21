@@ -103,7 +103,7 @@ ship:
              [27.5, -6.5],
              [35.4, -4.0]]
 sim_dynamics:
-  vessel_model: 'Fossen_supply'  # see sim_dynamics.py for available models
+  vessel_model: 'AISship'  # see sim_dynamics.py for available models
   dt: 0.02                  # time step for integrating dynamics, 1 iteration of main simulation loop = dt seconds
   target_speed: 2.0         # m/s
   max_acceleration: 0.04    # m/s^2 -- too high of a value hurts tracking

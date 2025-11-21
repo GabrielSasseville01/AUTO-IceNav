@@ -1,9 +1,11 @@
 from typing import List
+import os
 
 import numpy as np
 import pandas as pd
 
 from ship_ice_planner.controller.NRC_supply import NrcSupply
+from ship_ice_planner.controller.AISship import AISship
 from ship_ice_planner.controller.supply import Supply
 from ship_ice_planner.controller.trajectory_setpoint import TrajectorySetpoint
 from ship_ice_planner.utils.storage import Storage
@@ -12,6 +14,7 @@ from ship_ice_planner.geometry.utils import Rxy
 VESSEL_MODELS = [
     'Fossen_supply',  # full scale model of an offshore supply vessel from https://github.com/cybergalactic/PythonVehicleSimulator
     'NRC_supply',     # 1:45 scale model of a vessel designed and built by the NRC
+    'AISship'
 ]
 STATE_HISTORY_FILE_NAME = 'state_history.txt'
 
@@ -110,15 +113,22 @@ class SimShipDynamics:
         self.state_storage = Storage(output_dir, file=STATE_HISTORY_FILE_NAME)  # log states at each time step
 
         self.vessel_model_name = vessel_model
+        print(f"Using vessel model: {self.vessel_model_name}")
+
         if vessel_model == 'NRC_supply':
             self.vessel_model = NrcSupply()
             self.state.u_actual = np.array([0, 0, 0], float)  # propeller speed in RPS
+
         elif vessel_model == 'Fossen_supply':
             self.vessel_model = Supply(controlSystem=control_mode,  # for debugging can do 'stepInput'
                                        V_current=0,    # ocean current speed m/s
                                        beta_current=0  # ocean current direction deg
                                        )
             self.state.u_actual = self.vessel_model.u_actual  # propeller speed in RPM
+
+        elif vessel_model == 'AISship':
+            self.vessel_model = AISship(path="trained_model/")
+            self.state.u_actual = np.array([0, 0, 0], float)  # propeller speed in RPS
 
         # for trajectory tracking
         self.setpoint_generator = None
@@ -132,7 +142,7 @@ class SimShipDynamics:
         [u, v, r] = self.state.nu
 
         # compute the control input
-        if self.vessel_model_name == 'NRC_supply':
+        if self.vessel_model_name in ['NRC_supply', 'AISship']:
             self.state.u_control = self.vessel_model.DPcontrol(self.state.eta, self.setpoint, self.dt)
 
         elif self.vessel_model_name == 'Fossen_supply':
@@ -153,7 +163,7 @@ class SimShipDynamics:
         [u, v, r] = self.state.nu
 
         # propagate vehicle dynamics
-        if self.vessel_model_name == 'NRC_supply':
+        if self.vessel_model_name in ['NRC_supply', 'AISship']:
             [u, v, r] = self.vessel_model.dynamics(u, v, np.rad2deg(r), self.state.u_control)
             self.state.nu = [u, v, np.deg2rad(r)]
             self.state.u_actual = self.state.u_control  # u_actual and u_control are the same for NRC_supply
@@ -192,24 +202,33 @@ class SimShipDynamics:
 
     def log_step(self, **kwargs):
         """This should only be called once per simulation step!"""
-        self.state_storage.put_scalars(time     =self.sim_time,
-                                       x        =self.state.x,
-                                       y        =self.state.y,
-                                       psi      =self.state.psi,
-                                       u        =self.state.u,
-                                       v        =self.state.v,
-                                       r        =self.state.r,
-                                       u_control=list(self.state.u_control),
-                                       u_actual =list(self.state.u_actual),
-                                       setpoint =self.setpoint,
-                                       tau      =list(self.vessel_model.compute_force(self.state.u_actual)),
-                                       energy_use=self.vessel_model.compute_energy_use(self.state.u_actual,
-                                                                                       self.state.nu,
-                                                                                       self.dt),
+        try:
+            tau = list(self.vessel_model.compute_force(self.state.u_actual))
+            energy_use = self.vessel_model.compute_energy_use(self.state.u_actual,
+                                                             self.state.nu,
+                                                             self.dt)
+            
+            self.state_storage.put_scalars(time     =self.sim_time,
+                                           x        =self.state.x,
+                                           y        =self.state.y,
+                                           psi      =self.state.psi,
+                                           u        =self.state.u,
+                                           v        =self.state.v,
+                                           r        =self.state.r,
+                                           u_control=list(self.state.u_control),
+                                           u_actual =list(self.state.u_actual),
+                                           setpoint =self.setpoint,
+                                           tau      =tau,
+                                           energy_use=energy_use,
 
-                                       **kwargs)
+                                           **kwargs)
 
-        self.state_storage.step()
+            self.state_storage.step()
+        except Exception as e:
+            print(f"ERROR in log_step: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def vessel_start_up(self, offset, final_y):
         """
@@ -228,14 +247,14 @@ class SimShipDynamics:
         self.change_to_DP_control()
 
     def change_to_step_input(self):
-        if self.vessel_model_name == 'NRC_supply':
+        if self.vessel_model_name in ['NRC_supply', 'AISship']:
             raise NotImplementedError
 
         elif self.vessel_model_name == 'Fossen_supply':
             self.vessel_model.controlMode = 'stepInput'
 
     def change_to_DP_control(self):
-        if self.vessel_model_name == 'NRC_supply':
+        if self.vessel_model_name in ['NRC_supply', 'AISship']:
             raise NotImplementedError
 
         elif self.vessel_model_name == 'Fossen_supply':
