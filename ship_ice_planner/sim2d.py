@@ -25,7 +25,9 @@ from ship_ice_planner.utils.sim_utils import *
 from ship_ice_planner.utils.ice_fracture_ridge import (
     IceFloeState, RidgeZone, FRACTURE_ENABLED, RIDGING_ENABLED,
     fracture_ice_floe, check_ridging_conditions, create_ridge_zone,
-    compute_ridge_resistance, RIDGE_MIN_FLOES, RIDGE_ACCUMULATION_RATE
+    compute_ridge_resistance, compute_compression_force,
+    RIDGE_MIN_FLOES, RIDGE_ACCUMULATION_RATE,
+    RIDGE_DECAY_TIME, RIDGE_MIN_ACTIVITY_DISTANCE
 )
 
 
@@ -203,6 +205,7 @@ def sim(
     
     # Visualization sync tracking
     vis_sync_counter = 0  # Counter for periodic visualization re-sync
+    ridge_geometry_update_counter = 0  # Counter for dynamic geometry updates
 
     # uses new batch module https://www.pymunk.org/en/latest/pymunk.batch.html
     buffer_get_body = pymunk.batch.Buffer()
@@ -398,7 +401,9 @@ def sim(
                 ship_velocity_vec = Vec2d(*state.get_global_velocity())
                 ship_position_vec = Vec2d(state.x, state.y)
                 ridge_resistance = compute_ridge_resistance(
-                    ship_velocity_vec, ship_position_vec, ridge_zones, dt
+                    ship_velocity_vec, ship_position_vec, 
+                    cfg.ship.vertices, state.psi,  # Ship geometry for contact area
+                    ridge_zones, dt, current_time=t
                 )
                 
                 # Track resistance
@@ -445,6 +450,7 @@ def sim(
                         batched_data[:, :2],  # updated positions
                         batched_data[:, 2])   # updated angles
                     )
+                    
 
                     fps = plot.update_fps()
 
@@ -648,16 +654,82 @@ def sim(
             
             # Check for ridging conditions (periodically to avoid performance hit)
             if RIDGING_ENABLED:
-                ridge_check_counter += 1
-                if ridge_check_counter >= 10:  # Check every 10 iterations
-                    ridge_check_counter = 0
-                    ship_velocity_vec = Vec2d(*state.get_global_velocity())
-                    ridging_candidates = check_ridging_conditions(
-                        polygons, ship_body.position, ship_velocity_vec, state.psi
-                    )
+                try:
+                    ridge_check_counter += 1
+                    if ridge_check_counter >= 10:  # Check every 10 iterations
+                        ridge_check_counter = 0
+                        ship_velocity_vec = Vec2d(*state.get_global_velocity())
+                        ridging_candidates, compressed_groups = check_ridging_conditions(
+                            polygons, ship_body.position, ship_velocity_vec, state.psi
+                        )
                     
-                    # Create ridge zone if enough candidates
-                    if len(ridging_candidates) >= RIDGE_MIN_FLOES:
+                    # NEW: Use floe-to-floe compression detection (more realistic)
+                    # Create ridge zone for each compressed group with enough floes
+                    # Allow groups of 2+ floes (compression requires at least 2)
+                    for compressed_group in compressed_groups:
+                        if len(compressed_group) >= 2:  # Minimum 2 floes for compression
+                            # Calculate center of compressed floe group
+                            group_positions = [poly.body.position for poly in compressed_group]
+                            ridge_center = Vec2d(
+                                sum(p.x for p in group_positions) / len(group_positions),
+                                sum(p.y for p in group_positions) / len(group_positions)
+                            )
+                            
+                            # Calculate ridge orientation from compression direction
+                            # Use average direction from ship to floes
+                            ship_to_center_vec = ridge_center - ship_body.position
+                            if ship_to_center_vec.length > 0.01:  # Avoid zero-length vector
+                                ship_to_center = ship_to_center_vec.normalized()
+                                ridge_direction = math.atan2(ship_to_center.y, ship_to_center.x)
+                            else:
+                                # Use ship heading if center is too close
+                                ridge_direction = state.psi
+                            
+                            # Estimate ridge size from floe group extent
+                            positions_array = np.array([[p.x, p.y] for p in group_positions])
+                            extent_x = positions_array[:, 0].max() - positions_array[:, 0].min()
+                            extent_y = positions_array[:, 1].max() - positions_array[:, 1].min()
+                            
+                            # Limit extent to reasonable values to prevent huge ridges
+                            extent_x = min(extent_x, 50.0)  # Max 50m extent
+                            extent_y = min(extent_y, 50.0)
+                            
+                            ridge_width = max(extent_x + 10.0, 20.0)  # Add margin, min 20m
+                            ridge_length = max(extent_y + 10.0, 30.0)  # Min 30m
+                            
+                            # Cap maximum size
+                            MAX_RIDGE_SIZE = 100.0  # meters
+                            ridge_width = min(ridge_width, MAX_RIDGE_SIZE)
+                            ridge_length = min(ridge_length, MAX_RIDGE_SIZE)
+                            
+                            # Check if we already have a ridge zone nearby
+                            new_ridge_needed = True
+                            for existing_ridge in ridge_zones:
+                                if (existing_ridge.position - ridge_center).length < 30:
+                                    new_ridge_needed = False
+                                    break
+                            
+                            if new_ridge_needed:
+                                new_ridge = create_ridge_zone(
+                                    space, ridge_center, ridge_direction, 
+                                    width=max(ridge_width, 20.0), 
+                                    length=max(ridge_length, 30.0),
+                                    creation_time=t,
+                                    contributing_floes=compressed_group
+                                )
+                                ridge_zones.append(new_ridge)
+                                
+                                # Track ridge creation
+                                ridge_history.append({
+                                    'time': t,
+                                    'x': ridge_center.x,
+                                    'y': ridge_center.y,
+                                    'direction': ridge_direction,
+                                    'num_floes': len(compressed_group)
+                                })
+                    
+                    # LEGACY: Fallback to old method if no compression detected but enough individual candidates
+                    if len(compressed_groups) == 0 and len(ridging_candidates) >= RIDGE_MIN_FLOES:
                         # Check if we already have a ridge zone nearby
                         new_ridge_needed = True
                         ridge_center = ship_body.position + Vec2d(
@@ -672,7 +744,8 @@ def sim(
                         
                         if new_ridge_needed:
                             new_ridge = create_ridge_zone(
-                                space, ridge_center, state.psi, width=20.0, length=30.0
+                                space, ridge_center, state.psi, width=20.0, length=30.0,
+                                creation_time=t
                             )
                             ridge_zones.append(new_ridge)
                             
@@ -681,18 +754,92 @@ def sim(
                                 'time': t,
                                 'x': ridge_center.x,
                                 'y': ridge_center.y,
-                                'direction': state.psi
+                                'direction': state.psi,
+                                'num_floes': len(ridging_candidates)
                             })
                     
-                    # Update ridge thickness based on nearby floes
+                    # Update ridge geometry dynamically (less frequently than thickness)
+                    # NOTE: Dynamic shape updates are disabled by default to prevent physics instability
+                    # Only logical position/size are updated, not Pymunk shapes
+                    ridge_geometry_update_counter += 1
+                    if ridge_geometry_update_counter >= 50:  # Update geometry every 50 iterations (~1 second at 0.02s dt)
+                        ridge_geometry_update_counter = 0
+                        
+                        # Update geometry for each ridge (logical only, no Pymunk shape updates)
+                        for ridge_zone in ridge_zones:
+                            ridge_zone.update_geometry_from_floes(
+                                space, polygons, 
+                                min_update_interval=1.0, 
+                                current_time=t,
+                                enable_dynamic_shape=False  # Disabled for stability
+                            )
+                        
+                        # Check for ridge merging (logical only)
+                        merged_indices = set()
+                        for i, ridge1 in enumerate(ridge_zones):
+                            if i in merged_indices:
+                                continue
+                            for j, ridge2 in enumerate(ridge_zones[i+1:], start=i+1):
+                                if j in merged_indices:
+                                    continue
+                                if ridge1.can_merge_with(ridge2, merge_distance=40.0):
+                                    # Merge ridge2 into ridge1 (logical only)
+                                    ridge1.merge_with(ridge2, space, enable_dynamic_shape=False)
+                                    merged_indices.add(j)
+                        
+                        # Remove merged ridges
+                        ridge_zones[:] = [r for i, r in enumerate(ridge_zones) if i not in merged_indices]
+                    
+                    # Update ridge activity and remove decayed ridges
+                    ship_position_vec = Vec2d(state.x, state.y)
+                    ridges_to_remove = []
+                    for i, ridge_zone in enumerate(ridge_zones):
+                        # Update activity status
+                        ridge_zone.update_activity(ship_position_vec, t, polygons)
+                        
+                        # Check if ridge should be removed
+                        if ridge_zone.should_remove(t):
+                            ridges_to_remove.append(i)
+                    
+                    # Remove decayed ridges (in reverse order to maintain indices)
+                    for i in reversed(ridges_to_remove):
+                        ridge_zone = ridge_zones[i]
+                        # Remove Pymunk shape
+                        if ridge_zone.shape is not None:
+                            space.remove(ridge_zone.shape)
+                        if ridge_zone.body is not None:
+                            space.remove(ridge_zone.body)
+                        # Remove from list
+                        ridge_zones.pop(i)
+                    
+                    # Update ridge thickness based on nearby floes with compression forces
                     thicknesses = []
                     for ridge_zone in ridge_zones:
                         accumulated_mass = 0.0
+                        nearby_floes = []
+                        
+                        # Find nearby floes and accumulate mass
                         for poly in polygons:
                             distance = (poly.body.position - ridge_zone.position).length
                             if distance < ridge_zone.width:
-                                accumulated_mass += poly.mass * RIDGE_ACCUMULATION_RATE * dt
-                        ridge_zone.update_thickness(accumulated_mass)
+                                nearby_floes.append(poly)
+                                # Enhanced accumulation: rate depends on compression and ice concentration
+                                # Higher compression = faster accumulation
+                                compression_factor = 1.0 + min(ridge_zone.average_compression_force / 5000.0, 1.0)
+                                accumulation_rate = RIDGE_ACCUMULATION_RATE * compression_factor
+                                accumulated_mass += poly.mass * accumulation_rate * dt
+                        
+                        # Compute compression force from contributing floes or nearby floes
+                        compression_force = 0.0
+                        if len(ridge_zone.contributing_floes) >= 2:
+                            # Use contributing floes if available
+                            compression_force = compute_compression_force(ridge_zone.contributing_floes)
+                        elif len(nearby_floes) >= 2:
+                            # Use nearby floes as fallback
+                            compression_force = compute_compression_force(nearby_floes)
+                        
+                        # Update thickness with compression force
+                        ridge_zone.update_thickness(accumulated_mass, current_time=t, compression_force=compression_force)
                         thicknesses.append(ridge_zone.thickness)
                     
                     # Track thickness updates
@@ -702,6 +849,13 @@ def sim(
                             'thickness': thicknesses.copy(),
                             'num_ridges': len(ridge_zones)
                         })
+                except Exception as e:
+                    # Don't let ridging errors stop the simulation
+                    if debug:
+                        print(f"Ridging error (non-fatal): {e}")
+                        import traceback
+                        traceback.print_exc()
+                    pass
             
             # clear collision metrics
             system_ke_loss.clear(), delta_ke_ice.clear(), total_impulse.clear(), collided_ob_idx.clear(), contact_pts.clear()

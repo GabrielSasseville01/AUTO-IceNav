@@ -236,6 +236,7 @@ class Plot:
                     PatchCollection(self.obs_patches, match_original=True)
                 )
                 self.add_artist(self.obs_patch_collection)
+            
 
             # initialize artist for ship
             if ship_vertices is not None:
@@ -431,7 +432,7 @@ class Plot:
 
         if patch_fill:
             self.obs_patch_collection.set_facecolor(patch_fill)
-
+    
     def animate_map(self, save_fig_dir=None, suffix=0):
         # draw artists for map plot
         for artist in self.map_artists:
