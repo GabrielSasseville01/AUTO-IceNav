@@ -43,7 +43,7 @@ class AISship:
         # Loading sea model and initialization map
         self.sea_step = 0
         self.sea_step_frequency = 1000
-        self.sea_noise_strength = 0.1
+        self.sea_noise_strength = 0.5
         self.sea_x = torch.load(seamap_path, map_location=torch.device('cpu'))
         state_dict = torch.load(seanet_path, map_location=torch.device('cpu'))
         self.seanet = SeaCurrentRNN(

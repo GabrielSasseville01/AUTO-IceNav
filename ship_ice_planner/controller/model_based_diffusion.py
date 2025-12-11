@@ -14,6 +14,7 @@ class ModelBasedDiffusionController(NrcSupply):
     """
     
     def __init__(self, 
+                 diffusion_noise_clipping: float = 50,
                  horizon: int = 50,
                  num_samples: int = 2048,
                  num_diffusion_steps: int = 100,
@@ -33,6 +34,7 @@ class ModelBasedDiffusionController(NrcSupply):
         super().__init__()
         
         # Diffusion parameters
+        self.diffusion_noise_clipping = diffusion_noise_clipping
         self.horizon = horizon
         self.num_samples = num_samples
         self.num_diffusion_steps = num_diffusion_steps
@@ -264,7 +266,7 @@ class ModelBasedDiffusionController(NrcSupply):
         Single reverse diffusion step following the SDE formulation.
         
         :param i: Current diffusion step index
-        :param Ybar_i: Current mean control sequence (horizon, nu_dim)
+        :param Ybar_i: Current mean control sequence (horizon, nu_dim), nu_dim = surge, sway, yaw
         :param eta_start: Initial pose
         :param nu_start: Initial velocities
         :param local_path: Reference path
@@ -279,19 +281,28 @@ class ModelBasedDiffusionController(NrcSupply):
         eps_u = np.random.normal(0, 1, (self.num_samples, self.horizon, self.nu_dim))
         Y0s = eps_u * self.sigmas[i] + Ybar_i
         
+        # NOTE: this trajectory correction introduces a "swift" to the left at the beginning of
+        # the execution of any new plan, pretty weird. Setting diffusion noise clipping is already good enough.
         # ENFORCE CONSTANT FORWARD SPEED: maintain surge control to keep forward motion
         # Only optimize sway and yaw, keep surge at level that maintains forward speed
         if self.target_surge_speed is not None and self.enforce_forward_motion:
             # ALWAYS enforce minimum forward surge control
             if len(Ybar_i) > 0:
+                # max_surge = 0.50
+                # max_sway = 0.05
+                # max_yaw = -0.006
                 mean_surge = max(500.0, Ybar_i[:, 0].mean())  # Ensure minimum surge
+                mean_sway = max(500.0, Ybar_i[:, 1].mean())  # Ensure minimum surge
+                mean_yaw = max(500.0, Ybar_i[:, 2].mean())  # Ensure minimum surge
                 # Maintain surge at level that keeps forward motion - allow some variation
                 Y0s[:, :, 0] = np.maximum(300.0, mean_surge + eps_u[:, :, 0] * self.sigmas[i] * 0.2)
+                Y0s[:, :, 1] = np.maximum(300.0, mean_sway + eps_u[:, :, 0] * self.sigmas[i] * 0.2)
+                Y0s[:, :, 2] = np.maximum(300.0, mean_yaw + eps_u[:, :, 0] * self.sigmas[i] * 0.2)
             else:
                 # Default forward speed control - STRONG forward control
                 Y0s[:, :, 0] = 1000.0  # Strong base surge control for forward motion
         
-        Y0s = np.clip(Y0s, -2000, 2000)  # Clip to reasonable control limits
+        Y0s = np.clip(Y0s, -self.diffusion_noise_clipping, self.diffusion_noise_clipping)  # Clip to reasonable control limits
         
         # Evaluate trajectories and compute rewards
         rewards = self.objective_function(Y0s, eta_start, nu_start, local_path, dt, costmap, goal_y=goal_y)
@@ -305,6 +316,7 @@ class ModelBasedDiffusionController(NrcSupply):
         logp0 = (rewards - rew_mean) / rew_std / self.temperature
         
         # Softmax weights
+        # stochastic approximation?
         weights = np.exp(logp0 - np.max(logp0))  # Numerically stable
         weights = weights / weights.sum()
         

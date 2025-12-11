@@ -517,11 +517,42 @@ def view_experiments(pickle_file, num_trials_per_plot=10, num_trials_skip=10):
     print_ob_stats(all_obs)
 
 
+def draw_gradient_polygon(ax, vertices, n_layers=10, edge_color=(0.75, 0.75, 0.75), center_color=(1.0, 1.0, 1.0)):
+    """Draw a polygon with a gradient from edge_color (light grey) to center_color (white).
+    Uses clipping to correctly handle concave polygons."""
+    vertices = np.array(vertices)
+    centroid = np.mean(vertices, axis=0)
+    
+    # Create clip patch from original polygon
+    clip_patch = patches.Polygon(vertices, closed=True, transform=ax.transData)
+    
+    # Draw layers from outside (light grey) to inside (white)
+    for i in range(n_layers):
+        # Scale factor: 1.0 for outermost, decreasing toward center
+        scale = 1.0 - (i / n_layers) * 0.8  # Scale down to 20% of original size at center
+        
+        # Interpolate color from edge to center
+        t = i / (n_layers - 1) if n_layers > 1 else 0
+        color = tuple(edge_color[j] + t * (center_color[j] - edge_color[j]) for j in range(3))
+        
+        # Scale vertices toward centroid
+        scaled_vertices = centroid + scale * (vertices - centroid)
+        
+        patch = patches.Polygon(scaled_vertices, closed=True, fill=True, fc=color, ec='none')
+        ax.add_patch(patch)
+        # Clip to original polygon boundary to handle concave shapes
+        patch.set_clip_path(clip_patch)
+    
+    # Draw thin edge outline
+    outline = patches.Polygon(vertices, closed=True, fill=False, ec=(0.5, 0.5, 0.5), linewidth=0.5)
+    ax.add_patch(outline)
+
+
 def ice_field_plot(concentration, ice_field_idx, ship_state, obs, map_shape=None, ship_vertices=None):
     fig, ax = plt.subplots(figsize=(10, 10))
     for p in obs:
-        patch = patches.Polygon(p['vertices'],  True, fill=True, fc=ICE_PATCH_COLOR, ec='k', linewidth=0.5)
-        ax.add_patch(patch)
+        draw_gradient_polygon(ax, p['vertices'], n_layers=10, 
+                              edge_color=(0.85, 0.85, 0.85), center_color=(1.0, 1.0, 1.0))
 
     ax.set_aspect('equal')
     ax.plot(ship_state[0], ship_state[1], 'rx')

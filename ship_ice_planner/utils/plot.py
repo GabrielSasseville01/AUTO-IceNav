@@ -23,6 +23,45 @@ DEFAULT_SAVE_FIG_FORMAT = 'pdf'
 ICE_PATCH_COLOR         = 'lightgrey'  # 'white'
 SHIP_PATCH_COLOR        = 'white'      # 'lightgrey'
 OPEN_WATER_COLOR        = 'lightblue'      # 'lightblue'
+
+# Gradient settings for ice patches
+ICE_GRADIENT_LAYERS     = 8
+ICE_EDGE_COLOR          = (0.75, 0.75, 0.75)  # light grey at edges
+ICE_CENTER_COLOR        = (1.0, 1.0, 1.0)     # white at center
+
+
+def add_gradient_polygon(ax, vertices, n_layers=ICE_GRADIENT_LAYERS, 
+                         edge_color=ICE_EDGE_COLOR, center_color=ICE_CENTER_COLOR):
+    """Add a polygon with gradient from edge_color to center_color directly to axes.
+    Uses clipping to handle concave polygons correctly."""
+    vertices = np.array(vertices)
+    centroid = np.mean(vertices, axis=0)
+    
+    # Create clip patch from original polygon
+    clip_patch = patches.Polygon(vertices, closed=True, transform=ax.transData)
+    
+    added_patches = []
+    
+    # Create layers from outside (grey) to inside (white)
+    for i in range(n_layers):
+        scale = 1.0 - (i / n_layers) * 0.8
+        t = i / (n_layers - 1) if n_layers > 1 else 0
+        color = tuple(edge_color[j] + t * (center_color[j] - edge_color[j]) for j in range(3))
+        scaled_vertices = centroid + scale * (vertices - centroid)
+        patch = patches.Polygon(scaled_vertices, closed=True, fill=True, fc=color, ec='none', zorder=10)
+        ax.add_patch(patch)
+        # Clip each layer to the original polygon boundary
+        patch.set_clip_path(clip_patch)
+        added_patches.append(patch)
+    
+    # Add outline
+    outline = patches.Polygon(vertices, closed=True, fill=False, ec=(0.5, 0.5, 0.5), linewidth=0.5, zorder=10)
+    ax.add_patch(outline)
+    added_patches.append(outline)
+    
+    return added_patches
+
+
 SWATH_COLOR             = 'white'
 PLANNED_PATH_COLOR      = 'red'
 SHIP_ACTUAL_PATH_COLOR  = 'blue'
@@ -249,19 +288,16 @@ class Plot:
             self.prev_ship_pos = ship_pos
 
             # initialize sea currents background (before obstacles so it's behind)
+            # NOTE: Do NOT add to sim_artists - it should stay as static background
             if sea_currents is not None:
                 self.sea_quiver = None
                 self._create_sim_sea_currents_plot(sea_currents)
-                self.add_artist(self.sea_quiver)
 
-            # initialize artist for ice polygons
+            # initialize artist for ice polygons with gradient effect
             if len(obstacles):
-                self.obs_patches = [patches.Polygon(obs, True, fill=True,
-                                                    fc=ICE_PATCH_COLOR, ec='k', linewidth=0.5) for obs in obstacles]
-                self.obs_patch_collection = self.sim_ax.add_collection(
-                    PatchCollection(self.obs_patches, match_original=True)
-                )
-                self.add_artist(self.obs_patch_collection)
+                self.obs_patches = []
+                for obs in obstacles:
+                    self.obs_patches.extend(add_gradient_polygon(self.sim_ax, obs))
             
 
             # initialize artist for ship
@@ -447,16 +483,33 @@ class Plot:
             obstacles = [obs['vertices'] for obs in obstacles]
 
         if self.sim:
-            # this is a bit hacky but seems to provide a speedup
-            self.obs_patch_collection._paths = [  # skips additional step in .set_paths(...)
-                Path(ob, closed=False) for ob in obstacles
-            ]
+            # Update gradient patches for each obstacle
+            n_layers = ICE_GRADIENT_LAYERS
+            patches_per_obs = n_layers + 1  # layers + outline
+            
+            for obs_idx, ob in enumerate(obstacles):
+                vertices = np.array(ob)
+                centroid = np.mean(vertices, axis=0)
+                base_idx = obs_idx * patches_per_obs
+                
+                # Update clip path for all gradient layers
+                clip_patch = patches.Polygon(vertices, closed=True, transform=self.sim_ax.transData)
+                
+                for i in range(n_layers):
+                    scale = 1.0 - (i / n_layers) * 0.8
+                    scaled_vertices = centroid + scale * (vertices - centroid)
+                    self.obs_patches[base_idx + i].set_xy(scaled_vertices)
+                    self.obs_patches[base_idx + i].set_clip_path(clip_patch)
+                
+                # Update outline
+                self.obs_patches[base_idx + n_layers].set_xy(vertices)
         else:
             for i, ob in enumerate(obstacles):
                 self.obs_patches[i].set_xy(ob)
-            self.obs_patch_collection.set_paths(self.obs_patches)
+            if hasattr(self, 'obs_patch_collection'):
+                self.obs_patch_collection.set_paths(self.obs_patches)
 
-        if patch_fill:
+        if patch_fill and hasattr(self, 'obs_patch_collection'):
             self.obs_patch_collection.set_facecolor(patch_fill)
     
     def animate_map(self, save_fig_dir=None, suffix=0):
@@ -656,7 +709,7 @@ class Plot:
                 cmap=DEFAULT_COLOR_MAP,
                 scale=None,  # auto-scale
                 alpha=0.5,   # more transparent for sim background
-                zorder=0     # behind other elements
+                zorder=-10   # behind ice floes
             )
         else:
             # Update quiver plot

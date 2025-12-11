@@ -60,7 +60,7 @@ DRAG_FORCE_CONSTANT = 0.5 * WATER_DENSITY * CD_DRAG_COEFFICIENT * ICE_THICKNESS 
 # pymunk parameters
 SIMPLE_DAMPING = .99  # between 0 and 1 where 1 is no damping
 SOLVER_ITERATIONS = 50  # number of iterations for the solver, controls the accuracy of the simulation
-POLY_BUFFER_RADIUS = 0.01  # m
+POLY_BUFFER_RADIUS = 0.00  # m
 
 # misc parameters
 INIT_VELOCITY = 0.0  # m/s (was 1e-2 for "numerical stability" but causes initial drift)
@@ -341,10 +341,17 @@ def batched_apply_drag_from_water(sqrt_areas, masses, velocities, angular_veloci
     """
     speeds = np.linalg.norm(velocities, axis=1)
 
+    reference_mass = np.median(masses)
+    # Mass factor: heavier floes get MORE drag (values > 1 for heavy, < 1 for light)
+    mass_factor = (masses / reference_mass) ** 2  # Square root for gentler scaling
+
+    norm_masses = masses[:, None]
+    norm_masses = (norm_masses - norm_masses.mean()) / (norm_masses.std() + 1e-10)
     new_velocities = velocities + dt * (
         DRAG_FORCE_CONSTANT
         * sqrt_areas[:, None]
         * speeds[:, None]
+        * mass_factor[:, None]
         * -velocities
     ) / masses[:, None]
 

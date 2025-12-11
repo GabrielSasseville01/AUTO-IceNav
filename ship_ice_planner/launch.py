@@ -65,6 +65,9 @@ def launch(cfg_file=None, cfg=None, debug=False, logging=True, log_level=10, **k
     elif cfg.planner == 'lattice':
         res = lattice_planner(cfg, debug, **kwargs)
 
+    elif cfg.planner == 'diffusion':
+        res = diffusion_planner(cfg, debug, **kwargs)
+
     else:
         raise ValueError(f'Planner "{cfg.planner}" not recognized')
 

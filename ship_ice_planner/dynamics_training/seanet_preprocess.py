@@ -23,8 +23,8 @@ data_dir.mkdir(parents=True, exist_ok=True)
 # Set these manually or export the matching environment variables before running.
 # WEBDAV_USERNAME = os.environ.get("ECCO_WEBDAV_USERNAME", "")
 # WEBDAV_PASSWORD = os.environ.get("ECCO_WEBDAV_PASSWORD", "")
-WEBDAV_USERNAME = "diegocalanzone"
-WEBDAV_PASSWORD = "1ytBJcrCiOUsoXY287u"
+WEBDAV_USERNAME = ""
+WEBDAV_PASSWORD = ""
 
 download_files = False
 

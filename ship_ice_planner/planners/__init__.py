@@ -10,4 +10,9 @@ try:
 except ImportError:
     pass
 
+try:
+    from .diffusion import diffusion_planner
+except ImportError:
+    pass
+
 from .straight import straight_planner
