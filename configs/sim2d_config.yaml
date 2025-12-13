@@ -44,6 +44,9 @@ costmap:
   ice_resistance_weight: 1  # power (needs to be >= 1) to raise the ice concentration term to
   sic_kernel: [51, 51]      # the size of the kernel (in costmap grid units) for computing sea ice concentration map
   boundary_margin: 2        # margin in metres on either side of the ice channel to set as boundary
+  ridge_costmap_file: null  # Optional: path to ridge costmap pickle file (e.g., "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl")
+  ridge_cost_weight: 1.0    # Weight for ridge avoidance (higher = avoid ridges more strongly)
+  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"  # Optional: polygon file for aligning ridge density with ice floes
 prim:
   prim_name: 'PRIM_8H_4'    # name of the set of primitives to use (can be found in primitives.py)
   scale: 15                 # scale factor of the primitives -- need to consider the scale of the costmap!!

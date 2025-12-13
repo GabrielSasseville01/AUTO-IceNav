@@ -95,6 +95,7 @@ class Plot:
             global_path: np.ndarray = None,  # can also just be the path used to warm start optim step
             sea_currents: np.ndarray = None,  # sea current vector field (H, W, 2) or (T, H, W, 2)
             sea_currents_subsample: int = 20,  # subsampling factor for quiver plot
+            ridge_costmap: np.ndarray = None,  # Ridge density map for separate visualization
             # ---- sim plot params ----
             sim_figsize=(10, 10),
             target: Tuple[float, float] = None,
@@ -126,7 +127,7 @@ class Plot:
             self.sea_currents_subsample = sea_currents_subsample
 
             # create the figure with appropriate number of subplots
-            n_extra_plots = int(bool(nodes_expanded)) + int(sea_currents is not None)
+            n_extra_plots = int(bool(nodes_expanded)) + int(sea_currents is not None) + int(ridge_costmap is not None)
             if n_extra_plots > 0:
                 n_subplots = 1 + n_extra_plots
                 self.map_fig, axes = plt.subplots(1, n_subplots,
@@ -150,6 +151,12 @@ class Plot:
                     self.sea_quiver = None
                     self.create_sea_currents_plot(sea_currents)
                     self.map_artists.extend([self.sea_quiver, self.sea_ax.yaxis])
+                
+                if ridge_costmap is not None:
+                    self.ridge_ax = axes[ax_idx]
+                    ax_idx += 1
+                    # plot the ridge density map (will set limits after map_ax is created)
+                    self.ridge_image = None
                 
                 self.map_ax = axes[ax_idx]
                 # show the ticks for the map plot
@@ -178,6 +185,11 @@ class Plot:
                 cbar.set_label('cost')
                 self.map_artists.append(self.costmap_image)
                 self.map_ax.set_title('Costmap')
+            
+            # Now create ridge costmap plot after map_ax exists (so we can match limits)
+            if ridge_costmap is not None:
+                self.create_ridge_costmap_plot(ridge_costmap)
+                self.map_artists.extend([self.ridge_image, self.ridge_ax.yaxis])
 
             if swath is not None:
                 # init swath image
@@ -400,8 +412,13 @@ class Plot:
                 plt.show(block=False)
                 plt.pause(0.1)
 
-    def update_map(self, cost_map: np.ndarray = None) -> None:
-        self.costmap_image.set_data(cost_map)
+    def update_map(self, cost_map: np.ndarray = None, ridge_costmap: np.ndarray = None) -> None:
+        if cost_map is not None:
+            self.costmap_image.set_data(cost_map)
+        if ridge_costmap is not None and hasattr(self, 'ridge_image') and self.ridge_image is not None:
+            # Ridge costmap is already resized to match costmap dimensions and coordinate system
+            # Just display it directly without any alignment
+            self.ridge_image.set_data(ridge_costmap)
 
     def update_path(
             self,
@@ -508,9 +525,87 @@ class Plot:
                 self.obs_patches[i].set_xy(ob)
             if hasattr(self, 'obs_patch_collection'):
                 self.obs_patch_collection.set_paths(self.obs_patches)
+            
+            # Update obstacles on ridge plot too (if it exists)
+            if hasattr(self, 'ridge_ax') and self.ridge_ax is not None and len(obstacles) > 0:
+                # Check if ridge obstacle patches exist
+                if hasattr(self, 'ridge_obs_patches') and self.ridge_obs_patches:
+                    # Update existing patches if count matches
+                    if len(self.ridge_obs_patches) == len(obstacles):
+                        for patch, obs in zip(self.ridge_obs_patches, obstacles):
+                            patch.set_xy(obs)
+                    else:
+                        # Count changed, recreate
+                        if hasattr(self, 'ridge_obs_patch_collection'):
+                            try:
+                                self.ridge_obs_patch_collection.remove()
+                            except ValueError:
+                                pass
+                        self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                                                 for obs in obstacles]
+                        self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
+                            PatchCollection(self.ridge_obs_patches, match_original=True)
+                        )
+                else:
+                    # Create new ridge obstacle patches
+                    self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                                             for obs in obstacles]
+                    self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
+                        PatchCollection(self.ridge_obs_patches, match_original=True)
+                    )
 
         if patch_fill and hasattr(self, 'obs_patch_collection'):
             self.obs_patch_collection.set_facecolor(patch_fill)
+    
+    def create_ridge_costmap_plot(self, ridge_costmap: np.ndarray):
+        """
+        Create a visualization of the ridge density map.
+        
+        Args:
+            ridge_costmap: numpy array with ridge density values (0-1), shape (H, W)
+                          Should already be resized to match costmap dimensions
+        """
+        # Ridge costmap should already be resized to match costmap dimensions
+        # Verify it matches (should be same as costmap if passed correctly)
+        if hasattr(self, 'costmap_image') and self.costmap_image is not None:
+            target_shape = self.costmap_image.get_array().shape
+            if ridge_costmap.shape != target_shape:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f'Ridge costmap shape {ridge_costmap.shape} does not match costmap shape {target_shape}')
+        
+        if self.ridge_image is None:
+            # Use hot colormap for ridge density (bright = high density)
+            # Use same coordinate system as costmap (pixel coordinates, no extent)
+            # This ensures alignment with obstacles which are in costmap grid coordinates
+            vmax_val = max(1.0, ridge_costmap.max()) if ridge_costmap.size > 0 else 1.0
+            self.ridge_image = self.ridge_ax.imshow(
+                ridge_costmap,
+                origin='lower',
+                cmap='hot',
+                vmin=0.0,
+                vmax=vmax_val
+            )
+            self.ridge_ax.set_title('Ridge Density Map')
+            self.ridge_ax.set_aspect('equal')
+            # Match axis limits to costmap for alignment
+            if hasattr(self, 'map_ax'):
+                map_xlim = self.map_ax.get_xlim()
+                map_ylim = self.map_ax.get_ylim()
+                self.ridge_ax.set_xlim(map_xlim)
+                self.ridge_ax.set_ylim(map_ylim)
+                # Also match the scale transformation if it exists
+                if hasattr(self, 'scale') and self.scale != 1:
+                    self.scale_axis_labels(self.ridge_ax, self.scale)
+                self.ridge_ax.set_xlabel('x (m)')
+                self.ridge_ax.set_ylabel('y (m)')
+            divider = make_axes_locatable(self.ridge_ax)
+            cax = divider.append_axes('right', size='5%', pad=0.05)
+            cbar = self.map_fig.colorbar(self.ridge_image, cax=cax)
+            cbar.set_label('Ridge Density (0-1)')
+        else:
+            # Update existing image
+            self.ridge_image.set_data(ridge_costmap)
     
     def animate_map(self, save_fig_dir=None, suffix=0):
         # draw artists for map plot

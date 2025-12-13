@@ -49,6 +49,9 @@ costmap:
   ice_resistance_weight: 1  # power to raise the ice concentration term to
   sic_kernel: [51, 51]      # the size of the kernel for computing sea ice concentration map
   boundary_margin: 2        # margin in metres on either side of the ice channel to set as boundary
+  ridge_costmap_file: "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl"  # Ridge density costmap for path planning
+  ridge_cost_weight: 1.0    # Weight for ridge avoidance (higher = avoid ridges more strongly)
+  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"  # Polygon file for aligning ridge density with ice floes
 prim:
   prim_name: 'PRIM_8H_4'    # name of the set of primitives to use
   scale: 15                 # scale factor of the primitives
@@ -79,7 +82,7 @@ optim:
 ### SIMULATION PARAMS
 sim:
   t_max: 50000              # max number of iterations in simulation loop
-  steps: 4                  # number of simulation steps per iteration
+  steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
   save: false
@@ -108,7 +111,7 @@ ship:
              [35.4, -4.0]]
 sim_dynamics:
   vessel_model: 'AISship'
-  dt: 0.02
+  dt: 0.05
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30

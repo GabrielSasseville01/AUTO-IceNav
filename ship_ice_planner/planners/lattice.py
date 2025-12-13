@@ -300,6 +300,8 @@ def lattice_planner(cfg, debug=False, **kwargs):
                 ship_actual_path[1].append(ship_pos[1])
 
                 if plot is None:
+                    # Get aligned ridge costmap for visualization
+                    aligned_ridge = costmap.get_aligned_ridge_costmap()
                     plot_args = dict(
                         costmap=costmap.cost_map,
                         obstacles=costmap.all_obstacles,
@@ -312,6 +314,7 @@ def lattice_planner(cfg, debug=False, **kwargs):
                         save_fig_dir=plot_dir,
                         show=cfg.plot.show,
                         swath=path_compare.swath,
+                        ridge_costmap=aligned_ridge,  # Add aligned ridge density map for separate visualization
                     )
                     if optim_step:
                         plot = Plot(
@@ -354,7 +357,10 @@ def lattice_planner(cfg, debug=False, **kwargs):
                                          )
                     plot.update_obstacles(costmap.all_obstacles)
                     plot.update_ship(ship.vertices, *ship_pos)
-                    plot.update_map(costmap.cost_map)
+                    # Update costmap (which already includes ridge costs from _apply_ridge_costmap)
+                    # Update costmap and aligned ridge costmap for visualization
+                    aligned_ridge = costmap.get_aligned_ridge_costmap()
+                    plot.update_map(costmap.cost_map, ridge_costmap=aligned_ridge)
                     plot.animate_map(suffix=replan_count)  # save plot to disk
 
                 if debug:
