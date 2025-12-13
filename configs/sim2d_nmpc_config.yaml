@@ -18,7 +18,7 @@ plot:
 seed: 1
 
 ### PLANNER PARAMS
-horizon: 100.               # distance in metres for the horizon distance
+horizon: 500.               # distance in metres for the horizon distance
 save_paths: false           # if true save planned paths to disk
 path_step_size: 0.2        # spacing in meters between points on planned path
 
@@ -32,8 +32,8 @@ neural_mpc:
   model_path: 'neural_mpc_models/best_model.pth'  # Path to trained model
   use_gradient_optimization: true  # Use gradient-based optimization with costmap
   optimization_steps: 10    # Number of gradient steps for optimization
-  learning_rate: 0.01       # Learning rate for gradient optimization
-  horizon: 25              # Planning horizon (number of steps)
+  learning_rate: 0.1       # Learning rate for gradient optimization
+  horizon: 500              # Planning horizon (number of steps)
   max_discrete_nodes: 50    # Maximum number of discrete nodes
   num_spline_control_points: 15  # Number of B-spline control points to predict
   discrete_densify_step_size: 5.0  # Interpolate discrete plan to have points every N meters
@@ -69,7 +69,7 @@ optim:
     plot: false
   wp_spacing: 2
   goal_margin: 0.1
-  horizon: 25
+  horizon: 500
   smooth_control_weight: 50000
   p_opts:
     ipopt.print_level: 0
@@ -82,7 +82,7 @@ optim:
 ### SIMULATION PARAMS
 sim:
   t_max: 50000              # max number of iterations in simulation loop
-  steps: 4                  # number of simulation steps per iteration
+  steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
   save: false
@@ -111,7 +111,7 @@ ship:
              [35.4, -4.0]]
 sim_dynamics:
   vessel_model: 'AISship'
-  dt: 0.02
+  dt: 0.05
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30

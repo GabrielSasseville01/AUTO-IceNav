@@ -10,16 +10,6 @@ from ship_ice_planner.primitives import CACHED_PRIM_PATHS
 from ship_ice_planner.swath import CACHED_SWATH
 from ship_ice_planner.utils.utils import DotDict, setup_logger
 
-# Explicit imports for neural_mpc_planner (may fail silently in __init__.py)
-_neural_mpc_planner_imported = False
-_neural_mpc_planner = None
-try:
-    from ship_ice_planner.planners.neural_mpc import neural_mpc_planner as _neural_mpc_planner_fn
-    _neural_mpc_planner = _neural_mpc_planner_fn
-    _neural_mpc_planner_imported = True
-except ImportError:
-    pass
-
 
 def launch(cfg_file=None, cfg=None, debug=False, logging=True, log_level=10, **kwargs):
     try:
@@ -79,14 +69,7 @@ def launch(cfg_file=None, cfg=None, debug=False, logging=True, log_level=10, **k
         res = diffusion_planner(cfg, debug, **kwargs)
 
     elif cfg.planner == 'neural_mpc':
-        if not _neural_mpc_planner_imported or _neural_mpc_planner is None:
-            try:
-                from ship_ice_planner.planners.neural_mpc import neural_mpc_planner
-                _neural_mpc_planner = neural_mpc_planner
-            except ImportError as e:
-                logger.error(f'Failed to import neural_mpc_planner: {e}')
-                raise ImportError(f'neural_mpc planner not available. Make sure all dependencies (torch, etc.) are installed. Error: {e}')
-        res = _neural_mpc_planner(cfg, debug, **kwargs)
+        res = neural_mpc_planner(cfg, debug, **kwargs)
 
     else:
         raise ValueError(f'Planner "{cfg.planner}" not recognized')
