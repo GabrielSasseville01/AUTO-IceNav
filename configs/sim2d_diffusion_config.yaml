@@ -85,12 +85,12 @@ sim:
   steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
-  save: false
-  fps: 50
-  show: true
-  plot_steps: 5
-  inf_stream: true
-  move_yaxis_threshold: 10
+  save: true               # if true, save animation videos to MP4 files (sim.mp4 and costmap.mp4)
+  fps: 50                  # frames per second for saved animations
+  show: true               # if true, show live animation (cannot show and save at the same time)
+  plot_steps: 5            # steps between plot updates
+  inf_stream: true         # if true, animation view moves with ship
+  move_yaxis_threshold: 10 # distance traveled before y-axis moves
 goal_offset: 30
 
 ### SHIP MODEL AND CONTROLLER PARAMS
