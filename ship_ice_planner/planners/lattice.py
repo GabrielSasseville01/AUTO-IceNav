@@ -109,7 +109,7 @@ def lattice_planner(cfg, debug=False, **kwargs):
         plot = None
 
         max_replan = cfg.get('max_replan')
-        max_replan = max_replan if max_replan is not None else np.infty
+        max_replan = max_replan if max_replan is not None else np.inf
 
         # start main planner loop
         while replan_count < max_replan:

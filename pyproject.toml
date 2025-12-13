@@ -1,0 +1,12 @@
+[project]
+name = "auto-icenav"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "gdown>=5.2.0",
+]
+
+[tool.setuptools]
+py-modules = ["ship_ice_planner"]

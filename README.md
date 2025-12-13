@@ -1,291 +1,206 @@
-# AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields
+# Autonomous Ship Navigation in Ice-Covered Waters with Diffusion Model Predictive Control
 
-https://github.com/user-attachments/assets/dccdf3ca-38fa-4af4-8843-a98052ce4ea9
+![Python](https://img.shields.io/badge/python-3670A0?style=for-the-badge&logo=python&logoColor=ffdd54) 	![PyTorch](https://img.shields.io/badge/PyTorch-%23EE4C2C.svg?style=for-the-badge&logo=PyTorch&logoColor=white)
 
-This repo contains code for the following papers.
-<table>
-  <tr>
-    <td><a href="https://arxiv.org/abs/2411.17155"><img src="https://github.com/user-attachments/assets/f5b9751b-8185-49fe-9cf8-9336489b45f9" width="200"/></a></td>
-    <td><a href="https://arxiv.org/abs/2411.17155"><i>AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields</i></a><br/> <a href="https://rdesc.dev/">Rodrigue de Schaetzen</a>, <a href="https://scholar.google.de/citations?user=VGDjJ1QAAAAJ&hl=en">Alexander Botros</a>, <a href="https://ivaniz.github.io/">Ninghan Zhong</a>, <a href="https://scholar.google.com/citations?user=XB_g76cAAAAJ&hl=en">Kevin Murrant</a>, <a href="https://www.researchgate.net/scientific-contributions/Robert-Gash-2124111622">Robert Gash</a>, <a href="https://ece.uwaterloo.ca/~sl2smith/">Stephen L. Smith</a> <br/>T-RO 2025 <br/><br/> :point_left: Extended journal paper</td>
-  </tr>
-  <tr>
-    <td><a href="https://arxiv.org/abs/2302.11601"><img src="https://github.com/user-attachments/assets/58a6e167-2fd7-4f01-90b4-64f2309f51b6" width="200"/></a></td>
-    <td><a href="https://arxiv.org/abs/2302.11601"><i>Real-Time Navigation for Autonomous Surface Vehicles In Ice-Covered Waters</i></a><br/> <a href="https://rdesc.dev/">Rodrigue de Schaetzen</a>, <a href="https://scholar.google.de/citations?user=VGDjJ1QAAAAJ&hl=en">Alexander Botros</a>, <a href="https://www.researchgate.net/scientific-contributions/Robert-Gash-2124111622">Robert Gash</a>, <a href="https://scholar.google.com/citations?user=XB_g76cAAAAJ&hl=en">Kevin Murrant</a>, <a href="https://ece.uwaterloo.ca/~sl2smith/">Stephen L. Smith</a> <br/>ICRA 2023 <br/><br/> :point_left: Original conference paper</td>
-  </tr>
-</table>
+**Authors**: [Diego Calanzone](https://halixness.github.io/) & [Akash Karthikeyan](#) & [Gabriel Sasseville](#)<br>
+**Affiliation**: MILA Quebec AI Institute, Université de Montréal
 
-## Table of Contents
-1. [Demo Videos from NRC Experiments](#demo-videos-from-nrc-experiments)
-2. [Installation](#installation)
-3. [Simulator](#simulator)
-4. [Demo Scripts](#demo-scripts)
-5. [Reproducing Simulation Experiments](#reproducing-simulation-experiments)
-6. [Evaluation](#evaluation)
-7. [Contact](#contact)
-8. [Citation](#citation)
-9. [Acknowledgement](#acknowledgement)
+This project focuses on two main problems: (1) modeling ocean currents with ice covers and the interaction with icebreakers and commercial ships; (2) training ship controllers that leverage such dynamics model to either control autonomously or assist with the navigation of ships in glacial waters. The scope of this project originates from an increasingly relevant problem in modern transportation: the opening of novel trading routes induced by climate change [[1](https://www.thearcticinstitute.org/future-northern-sea-route-golden-waterway-niche/)] [[2](https://www.nature.com/articles/s41467-025-64437-4)] [[3](https://ici.radio-canada.ca/rci/en/news/2196943/melting-arctic-could-create-shipping-superhighway-and-a-surge-in-emissions-study)].
 
-## Demo Videos from NRC Experiments
-More videos can be found at this [google drive link](https://drive.google.com/drive/folders/1ftP-Dj6BW0-gLnjeTEmxeaJqgpjgWsX3?usp=sharing)
-or can be uploaded upon request.
+## Order of contents
+- Installation & Environment Setup
+- Data access
+- Preprocessing of data
+- Modeling ocean dynamics
+- Running the simulator
 
-https://github.com/user-attachments/assets/18e8206e-d8ea-494c-a233-2bc695e09942
+### Installation & Environment Setup
 
-https://github.com/user-attachments/assets/f3c3e7b8-50b5-4ac4-9a2d-04bc79be034b
-
-https://github.com/user-attachments/assets/a0ed863b-109d-4882-aa7c-c111840424c2
-
-https://github.com/user-attachments/assets/92d486d2-05c1-498d-a91c-855232e878de
-
-## Installation
-
-```shell
-# clone the repo and navigate to the directory
-git clone https://github.com/rdesc/AUTO-IceNav/ && cd AUTO-IceNav
-
-# create a new python 3.9 environment using conda (or some other virtual environment)
-conda create --name py39 python=3.9
-
-# activate the new environment
-conda activate py39
-
-# install packages 
-pip install -r requirements.txt
-
-# download the simulated ice field dataset
-# this contains the 400 ice fields used in the simulation experiments
-gdown https://drive.google.com/uc?id=1DuuVJfHHxXJqVZ1KG60q_X2uK5ZoS2cS --output data/
-
-# (optional) run tests
-cd test && pytest .
+1. Clone the repo and navigate to the directory
+```
+  https://github.com/ddidacus/diffmpc
+```
+2. Create an environment with `uv`
+```
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  uv venv
+```
+3. Install packages and the `ship_ice_planner` module
+```
+  uv sync
+  uv pip install -e .
 ```
 
-## Realistic map generation
-You can use pre-segmented satellite images of ice floes to compute a polygon map. We identify two valid sources of data:
-- [Multi-satellite floe size distribution of Arctic sea ice 2000-2020. Hwang, B., Wang, Y., & MOSAiC Remote Sensing Team (2022)](https://data.bas.ac.uk/full-record.php?id=GB/NERC/BAS/PDC/01650)
-- [Sea-Ice Floe Segmentation Products Derived from MEDEA Imagery for 1999 through 2014 in the Canada Basin. Denton et al. (2022)](https://zenodo.org/records/6341621)
+### Data access
+You will need to download: the pre-trained dynamics residual model; the simulation map (pre-generated polygons) or the raw satellite map for preprocessing; the experimental configuration.
 
-First, pre-process the image file (usually a `.png`) with the module:
-```python
-  python -m ship_ice_planner.image_process.generate_poly_map --input <segmented_png> --output <pkl_file> --crop_size <max_map_size> --visualize
+First, download the experiment configuration file (pickle):
+```
+  gdown 1DuuVJfHHxXJqVZ1KG60q_X2uK5ZoS2cS --output data/
 ```
 
-You will need to adjust your `.yaml` config file:
-- `map_shape` to `<max_map_size>`
-- `map_file` to `<pkl_file>`
-
-Alternatively, the randomly generated map from default `.pkl` data files will be loaded.
-
-## Quick experimental run
+Secondly, download the pre-generated polygon map, which represents the rendered satellite image that will be loaded by the simulator:
 ```
-  python demo_sim2d_ship_ice_navigation.py data/experiment_configs.pkl configs/sim2d_diffusion_config.yaml
+  gdown 1aJJdClZHxwOFd7wFO7PW8CDcQ-hsF4f5 --output data/
 ```
 
-## Simulator
-
-This repo includes a 2D physics simulator for simulating ship-ice interactions.[^1]
-It uses the [Pymunk](http://www.pymunk.org/en/latest/) library for simulating ice floes treated as rigid bodies, 
-and the [Marine Systems Simulator (Python)](https://github.com/cybergalactic/MSS) for the ship dynamics.
-The core physics parameters and utility functions are defined in [sim_utils.py](ship_ice_planner/utils/sim_utils.py),
-while the main simulation loop is defined in [sim2d.py](ship_ice_planner/sim2d.py).
-
-### Vessel Models
-
-The vessel model is selected by setting the `sim_dynamics.vessel_model` parameter in the configuration object / file.
-Additional vessel models can be added by extending the [SimShipDynamics](ship_ice_planner/controller/sim_dynamics.py) class.
-There are currently two vessel models available:
-- [Full scale PSV](ship_ice_planner/controller/supply.py)
-  - Dynamics: 3 DoF linear state-space model
-  - Mass: 6000,000 kg
-  - Dimensions: 76.2 m x 18.0 m (L x W)
-  - Propulsion: four tunnel thrusters (two fore and two aft) and two main propellers
-  - Bow geometry: [GEM simulation for local ice loads paper](https://onepetro.org/OTCARCTIC/proceedings-abstract/14OARC/All-14OARC/172495)
-    ([figure](docs/images/ship.png))
-- [1:45 scale platform supply vessel (PSV)](ship_ice_planner/controller/NRC_supply.py)
-  - Dynamics: 3 DoF linear state-space model
-  - Mass: 90 kg
-  - Dimensions: 1.84 m x 0.38 m x 0.43 m (L x W x H)
-  - Propulsion: two tunnel thrusters (fore and aft) and two main propellers
-  - Bow geometry: [NRC paper](https://ieeexplore.ieee.org/document/9705694)
-
-### Ice Field Generation
-We model the mass of an ice floe as a random variable that follows a log-normal distribution.
-To generate realistic random configurations of ice floes use the script
-[generate_rand_exp.py](ship_ice_planner/experiments/generate_rand_exp.py)
-(note, parameters are set using global variables in the python script).
-
-```bash
-python -m ship_ice_planner.experiments.generate_rand_exp
+For one of our baselines (the neural model), you can downloaded our training dataset of samples trajectories:
 ```
-This figure shows sample ice fields for four different ice concentrations: 20%, 30%, 40%, and 50%.
-<p>
-<img width="512" src="docs/images/ice_concentrations.png"/>
-</p>
-
-
-## Demo Scripts
-### Main demo
-https://github.com/user-attachments/assets/eeb6aaab-899c-44db-814a-3f66b7aa2dc7
-
-The main demo script [demo_sim2d_ship_ice_navigation.py](demo_sim2d_ship_ice_navigation.py) launches both the
-physics simulator and the AUTO-IceNav autopilot which runs one simulation trial.
-To launch the demo with default command line arguments (append `--help` to see full usage),
-run the following command:
-```shell
-python demo_sim2d_ship_ice_navigation.py
+  gdown 1Ssd7J_VgaTUYymt7bdxg6_a-d0lpkzYv --output data/
 ```
 
-The following are the command line arguments to change default behavior:
-```
-positional arguments:
-  exp_config_file       File path to experiment config pickle file generated by generate_rand_exp.py
-  planner_config_file   File path to planner and simulation parameter config yaml file (see configs/)
+### Preprocessing data
+Alternatively, you can process raw satellite images of ice-covered waters to generate your own simulation map. We used imagery collected by the MEDEA satellite system [Multi-satellite floe size distribution of Arctic sea ice 2000-2020, Hwang et al. 2022](https://ramadda.data.bas.ac.uk/repository/entry/show?entryid=7dc6e19d-79fa-41f1-99a7-da408592382f). 
 
-optional arguments:
-  -c ICE_CONCENTRATION  Pick an ice concentration from {0.2, 0.3, 0.4, 0.5}
-  -i ICE_FIELD_IDX      Pick an ice field from {0, 1, ..., 99}
-  --start x y psi       Initial ship position (x, y) in meters and heading (psi) in radians
-  --goal x y            Goal position (x, y) in meters
-  --no_anim             Disable live animation (significantly speeds up sim!)
-  --output_dir DIR      Directory path to store output data
-  --debug,              Debug mode
-  --logging,            Logging mode
-  --log_level LEVEL,    Logging level
+You can download the satellite image for our simulation location of reference:
+```
+  gdown 1Bk2QQaUft7j8kSz088lGYwHEAMRWR_cf --output data/
+  gdown 1SUFHewABXArSkEn3cs8bqU-5OuViSlQY --output data/
 ```
 
-Note, by default the positional command line arguments `exp_config_file` and `planner_config_file` are set to
-`'data/experiment_configs.pkl'` and `'configs/sim2d_config.yaml'`, respectively.
-
-The following is an example of launching the main demo with a 40% concentration ice field (with an index of 9) where the trial output files
-are saved to `'output/SAMPLE_TRIAL_NAME'`:
-```shell
-python demo_sim2d_ship_ice_navigation.py -c 0.4 -i 9 --output_dir output/SAMPLE_TRIAL_NAME
+Then generate the poly map:
+```
+  python ship_ice_planner/image_process/generate_poly_map.py \
+    --input <path_to_segmented_png> \
+    --output <path_to_pkl_icefloes_map> \
+    --crop_size <edge_in_pixels_of_squared_map> \
+    --visualize
 ```
 
-Within the output directory, the following files may be saved:
-```shell
-output/SAMPLE_TRIAL_NAME
-├── config.yaml                         # config file with parameters
-├── log.txt                             # logging file
-├── metrics.txt                         # metrics computed by planner
-├── state_history.txt                   # data logged by the simulator
-├── plots                               # stores planned paths (disabled with save_paths=False in config.yaml) 
-│    ├── 0.pkl                          # a pkl file is saved for each planning iteration
-│    ├── ...                            
-│    └── n.pkl  
-├── planner_plots                       # stores plots generated by the planner
-│    ├── 0.pdf                          # a pdf file is saved for each planning iteration
-│    ├── ...  
-│    └── n.pdf  
-└── sim_plots                           # plots generated by the simulator at the end of the trial
-     ├── sim.mp4                        # animation of the simulation (disabled with --no_anim)
-     ├── sim.pdf                        # shows the final state of the simulation
-     ├── control_vs_time.pdf            # control inputs vs time
-     ├── floe_mass_hist.pdf             # distribution of all ice floe and collided ice floe masses 
-     ├── impact_locations_impulse.pdf   # impulse vectors at impact locations for all logged collisions 
-     ├── ke_impulse_vs_time.pdf         # kinetic energy and impulse vs time
-     └── state_vs_time.pdf              # ship state vs time (_d suffix for desired state)
+Remember to update your configuration file to point to the generated ice flow map, for instance in `configs/debug_mode.yaml`:
+```
+  ...
+  map_file: "data/MEDEA_fram_20100629.pkl"
+  ...
 ```
 
-The following is a side-by-side comparison between the three navigation methods in a snippet of a simulation trial.
-The planner can be set by the parameter `planner` in the configuration file.
+### Modeling ocean dynamics
+Our dynamics model for simulation builds upon the following works:
+- [AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields, de Schaetzen et al. 2024](https://arxiv.org/abs/2411.17155)
+- [NASA ECCO4, Physical Oceanography Distributed Archive Center](https://podaac.jpl.nasa.gov/announcements/2021-04-27-ECCO-Version-4-Datasets-Release)
+- [Granular Approach for Continuum Modeling of Sea Ice, St-Denis et al. 2025](https://ams.confex.com/ams/2025Summit/meetingapp.cgi/Paper/459731)
+- [On generalized residual network for deep learning of unknown dynamical systems, Chen et al. 2021](https://www.sciencedirect.com/science/article/abs/pii/S0021999121002576)
 
-https://github.com/user-attachments/assets/fc9d9243-8e03-4dc6-8810-65bee45f505c
+We extend the `AUTO-IceNav` simulator with: 
+- Physics for the ice-ridging phenomenon, leading to more accurate predictions of ice floe thickness and drift.
+- Implemented navier-stokes equations for 2D shallow waters, augmented with a deep residual model ([Chen et al. 2021](https://www.sciencedirect.com/science/article/abs/pii/S0021999121002576)) for supervised training on ECCO4 oceanographic data.
+- Map rendering based on satellite imagery of ice-covered waters, allowing us to ground our simulation to realistic scenarios for which we can embed real data on exogenous disturbances e.g. ocean currents.
 
-### No ice physics simulation
-To run the demo without the physics simulator, use the script [demo_dynamic_positioning.py](demo_dynamic_positioning.py).
-This script only simulates the vessel dynamics and runs the controller module.
-
-```bash
-python demo_dynamic_positioning.py
+You can select and download data from ECCO4 through our script:
 ```
-### Barebones simulation
-The demo script [demo_pymunk_minimal_sim.py](demo_pymunk_minimal_sim.py) is useful for testing and tuning the 
-[parameters](ship_ice_planner/utils/sim_utils.py) of the physics simulator.
-This script does not use the vessel dynamics model to simulate ship motion.
-```bash
-python demo_pymunk_minimal_sim.py
+  python scripts/dynamics/seanet_preprocess.py
 ```
-
-## Reproducing Simulation Experiments
-
-To run the full simulation experiments conducted in our paper, use the script [sim_exp.py](ship_ice_planner/experiments/sim_exp.py).
-This script sequentially runs 100 simulation trials for each ice concentration (20%, 30%, 40%, 50%) and for each navigation approach:
-AUTO-IceNav, and two baselines. A total of 1200 simulation trials takes 60 hours (with rendering disabled) to complete on a machine with Intel core i7 CPU and 32GB RAM.
-
-Below is a sample command to run the full simulation experiments where all the output files are saved to `'output/SAMPLE_RUN_NAME/'`:
-
-```shell
-python -m ship_ice_planner.experiments.sim_exp \
---run_name SAMPLE_RUN_NAME \
---planners straight skeleton lattice \
---method_names Straight Skeleton AUTO-IceNav \
---no_anim
+Where you will need to set the WEBDAV credentials obtained through signing up to ECCO4:
+```
+  WEBDAV_USERNAME = ""
+  WEBDAV_PASSWORD = ""
 ```
 
-## Evaluation
-The evaluation script [evaluate_run_sim.py](ship_ice_planner/evaluation/evaluate_run_sim.py) processes the output files generated by the simulation experiments.
-It computes various performance metrics, saved as csv files, and generates several plots including a plot
-showing all ship-ice collisions that occurred during the simulation trials:
-<p>
-<img width="512" src="docs/images/impacts.png"/>
-</p>
-
-If no errors occurred during the simulation trials, the evaluation pipeline will be triggered as the final step of
-[sim_exp.py](ship_ice_planner/experiments/sim_exp.py). Otherwise, the evaluation can be done manually via the following command:
-```shell
-python -m ship_ice_planner.evaluation.evaluate_run_sim --output_dir output/SAMPLE_RUN_NAME/ 
+The script will generate the equivalent file of `data/ECCO4.pkl`, which can be downloaded from here instead:
 ```
-                                                                                                                                                               
-Within the output directory, the following files will be saved:                                                                                                 
-```shell                                                                                                                                                       
-output/SAMPLE_RUN_NAME/                                                                                                                                       
-├── mean.csv                         # mean metrics aggregated over method and ice concentration                                                                                         
-├── raw_results.csv                  # metrics for each trial                                                                                                         
-├── 0.2                              # trials with 20% ice concentration                                    
-│    ├── 0                           # ice field index 0
-│    │    ├── results.csv            # results for ice field index 0
-│    │    ├── ice_field.png          # initial ice field configuration
-│    │    ├── METHOD_NAME_1          # output files for navigation method 1 (trial 1)
-│    │    ├── ...
-│    │    └── METHOD_NAME_n          # output files for navigation method n (trial n)
-│    ├── ...
-│    └── n                           # ice field index n
-├── 0.3                              # trials with 30% ice concentration
-└── ...                              # trials with the other ice concentrations
-```                                                                                                                                                            
+  gdown 1LC-PYrSpmVAkj4x2Cp8VIWQYA--Mf3oo --output data/
+```
 
-## Contact
-Feel free to open a git issue if you come across any issues or have any questions.
-The maintainer of this project can be reached at [rdeschae [at] uwaterloo [dot] ca]().
+To train our dynamics model with ECCO4, run:
+```
+  python scripts/dynamics/seanet_train.py
+```
+
+Alternatively, you can download our pretrained simulator here:
+```
+  gdown 15r4YbE-Gka0AmnPMgghKlxLgnVxim3Og --output data/
+```
+
+You will need to download the tensor with the initialization of the state of ocean currents (based on the first sampled timeframe in ECCO4):
+```
+  gdown 1N6iXWUxjvToKQSipU6mSU-F52iH98Cjg --output data/
+```
+
+You will finally need to set the config file accordingly, e.g. in `config/debug_mode.yaml`:
+```
+  ...
+  seamap_path: "ecco4_x0.pth"
+  seanet_path: "seanet.pth"
+  ...
+```
+
+**Note**: this pre-generated dataset is set to our simulation location (indicated in the following section).
+
+
+## Running the Simulator
+Our simulation is based on real ice-floe maps sampled from the Arctic Ocean and Beaufort Sea. Here follow the reference simulation details:
+- Codename: [MEDEA_fram_20100629](https://ramadda.data.bas.ac.uk/repository/entry/show?entryid=synth:7dc6e19d-79fa-41f1-99a7-da408592382f:L0ZyYWN0dXJpbmcvZnNkL01FREVBX2ZyYW1fMjAxMDA2MjkucG5n)
+- Location: Arctic Ocean, `85°00'00"N 0°03'00"E`
+- Timeframe: 2000-2020
+- We visualized available simulation locations [at this link](https://earth.google.com/earth/d/1y1QtmHqyp0btaxTsEV_iT2W4x2XOZvOh?usp=sharing)
+
+From this location, we used collected MEDEA satellite imagery and ocean currents data from [NASA ECCO4, Physical Oceanography Distributed Archive Center](https://podaac.jpl.nasa.gov/announcements/2021-04-27-ECCO-Version-4-Datasets-Release).
+
+
+### Running experiments
+You can run the main simulation script with different controllers:
+```
+  # Diffusion + MPC
+  python scripts/run_simulation.py data/experiment_configs.pkl configs/controllers/diffusion_controller.yaml
+  
+  # A* "lattice" algorithm + MPC
+  python scripts/run_simulation.py data/experiment_configs.pkl configs/controllers/astar_controller.yaml
+
+  # Fully connected NN + MPC
+  python scripts/run_simulation.py data/experiment_configs.pkl configs/controllers/nmpc_controller.yaml
+```
+
+You can additionally run the simulation in debug mod for development purposes:
+```
+  python scripts/run_simulation.py data/experiment_configs.pkl configs/debug_model.yaml
+```
+Debug mode simplifies the simulation steps to minimize latency, the A* lattice planner is used by default. 
+
+## Directory Structure
+
+```
+├── configs/                    # Configuration files
+│   ├── controllers/            # Controller-specific configs
+│   └── debug_mode.yaml         # Debug configuration
+├── data/                       # Datasets and experiment configs
+├── docs/                       # Documentation and images
+├── scripts/                    # Utility scripts
+│   ├── dynamics/               # Dynamics model training
+│   └── run_simulation.py       # Main simulation runner
+├── ship_ice_planner/           # Main package
+│   ├── controller/             # Ship controllers and dynamics
+│   ├── planners/               # Path planners (diffusion, lattice, skeleton)
+│   ├── image_process/          # Satellite image processing
+│   ├── evaluation/             # Evaluation and metrics
+│   ├── experiments/            # Experiment generation
+│   ├── geometry/               # Geometric utilities
+│   ├── utils/                  # General utilities
+│   ├── sim2d.py                # 2D simulator main loop
+│   └── a_star_search.py        # A* search implementation
+├── test/                       # Test suite
+├── main.py                     # Main entry point
+├── pyproject.toml              # Project configuration
+└── requirements.txt            # Python dependencies
+```
 
 ## Citation
-Please consider citing our papers if you find our work useful for your research:
-```BibTeX
-@article{deschaetzen2024autoicenav,
-  title={AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields},
-  author={de Schaetzen, Rodrigue and Botros, Alexander and Zhong, Ninghan and Murrant, Kevin and Gash, Robert and Smith, Stephen L},
-  journal={IEEE Transactions on Robotics},
-  year={2025},
-  volume={41},
-  pages={5875-5895},
-  publisher={IEEE}
-}
 
-@inproceedings{deschaetzen2023real,
-  title={Real-Time Navigation for Autonomous Surface Vehicles In Ice-Covered Waters}, 
-  author={de Schaetzen, Rodrigue and Botros, Alexander and Gash, Robert and Murrant, Kevin and Smith, Stephen L},
-  booktitle={2023 IEEE International Conference on Robotics and Automation (ICRA)},
-  pages={1069--1075},
-  year={2023},
-  organization={IEEE}
+If you use this code or find our work helpful, please cite our paper:
+
+```bibtex
+@misc{calanzone2025diffmpc,
+  title        = {Autonomous Ship Navigation in Ice-Covered Waters with Diffusion Model Predictive Control},
+  author       = {Calanzone, Diego and Karthikeyan, Akash and Sasseville, Gabriel},
+  year         = {2025},
+  howpublished = {\url{https://github.com/ddidacus/diffmpc}},
+  note         = {MILA Quebec AI Institute, Université de Montréal}
 }
 ```
 
-This work was completed as part of the [MASc thesis](https://hdl.handle.net/10012/20785) of Rodrigue de Schaetzen at the University of Waterloo.
+## Acknowledgements
 
-## Acknowledgement
-This repo uses the python implementation of the [Marine Systems Simulator (MSS)](https://github.com/cybergalactic/PythonVehicleSimulator)
-by Thor I. Fossen.
+TBD.
 
-[^1]: See this video we found on YouTube of a full-scale ship navigating pack ice in Antarctica [https://www.youtube.com/watch?v=Q7qEi_Dcvbs](https://www.youtube.com/watch?v=Q7qEi_Dcvbs).
+## Contact
+
+Feel free to open a git issue if you come across any issues or have any questions.

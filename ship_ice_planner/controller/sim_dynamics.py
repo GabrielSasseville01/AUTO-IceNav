@@ -88,6 +88,8 @@ class SimShipDynamics:
                  output_dir=None,
                  control_mode='DPcontrol',
                  track_time=None,
+                 seamap_path: str = "ecco4_x0.pth",
+                 seanet_path: str = "seanet.pth",
                  **kwargs):
         """
         :param vessel_model: vessel model to use, available options are in VESSEL_MODELS
@@ -99,6 +101,8 @@ class SimShipDynamics:
         :param output_dir: directory to store simulation data
         :param control_mode: control mode for the vessel model
         :param track_time: time to track the trajectory in seconds before triggering a replan
+        :param seamap_path: path to seamap weights file (only used for AISship model)
+        :param seanet_path: path to seanet weights file (only used for AISship model)
         """
         assert vessel_model in VESSEL_MODELS
         self.dt = dt
@@ -127,7 +131,7 @@ class SimShipDynamics:
             self.state.u_actual = self.vessel_model.u_actual  # propeller speed in RPM
 
         elif vessel_model == 'AISship':
-            self.vessel_model = AISship(seamap_path="ecco4_x0.pth", seanet_path="seanet.pth")
+            self.vessel_model = AISship(seamap_path=seamap_path, seanet_path=seanet_path)
             self.state.u_actual = np.array([0, 0, 0], float)  # propeller speed in RPS
 
         # for trajectory tracking

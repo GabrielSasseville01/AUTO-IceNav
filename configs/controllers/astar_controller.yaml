@@ -14,7 +14,7 @@ map_shape:
 map_file: "data/MEDEA_fram_20100629.pkl"
 plot:
   y_axis_limit: 600         # limit in metres for the y-axis of the plot
-  show: false               # true will show planner plots
+  show: true               # true will show planner plots
 seed: 1
 
 ### PLANNER PARAMS
@@ -23,25 +23,14 @@ save_paths: false           # if true save planned paths to disk
 path_step_size: 0.02        # spacing in meters between points on planned path
 
 # CHANGED: Use diffusion planner instead of lattice
-planner: 'diffusion'        # path planner: 'skeleton', 'straight', 'lattice', or 'diffusion'
+planner: 'lattice'        # path planner: 'skeleton', 'straight', 'lattice', or 'diffusion'
                             # 'diffusion' combines A* discrete planning with diffusion optimization
-
-### DIFFUSION PLANNER SPECIFIC PARAMS
-# These parameters control the diffusion optimization step
-diffusion:
-  noise_clipping: 5        # clip the diffusion noise to this value
-  horizon: 8              # prediction horizon for diffusion (number of steps)
-  num_samples: 32          # number of trajectory samples per diffusion step
-  num_diffusion_steps: 32   # number of diffusion iterations (more = better but slower)
-  temperature: 0.1          # temperature for softmax weighting (lower = more greedy)
-  beta0: 0.0001             # initial beta for diffusion noise schedule
-  betaT: 0.01               # final beta for diffusion noise schedule
 
 # A* parameters (used for initial discrete path)
 a_star:
   weight: 1                 # static weighting for weighed A* f(n) = g(n) + w * h(n) where weight > 1
 costmap:
-  scale: 0.25                # scale factor of the costmap which gives a resolution of 1/scale x 1/scale metres
+  scale: 0.5                # scale factor of the costmap which gives a resolution of 1/scale x 1/scale metres
   collision_cost_weight:
    0.5               # multiplier for the collision cost (0.00000048)
   obs_cost_buffer_factor:
@@ -49,16 +38,19 @@ costmap:
   ice_resistance_weight: 1  # power to raise the ice concentration term to
   sic_kernel: [51, 51]      # the size of the kernel for computing sea ice concentration map
   boundary_margin: 2        # margin in metres on either side of the ice channel to set as boundary
+  ridge_costmap_file: "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl"  # Ridge density costmap for path planning
+  ridge_cost_weight: 1.0    # Weight for ridge avoidance (higher = avoid ridges more strongly)
+  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"  # Polygon file for aligning ridge density with ice floes
 prim:
   prim_name: 'PRIM_8H_4'    # name of the set of primitives to use
-  scale: 20                 # scale factor of the primitives
+  scale: 15                 # scale factor of the primitives
   step_size: 0.5            # step size for sampling points on the path
 
 # Optimization step (can be disabled for diffusion planner since diffusion handles optimization)
 optim:
   plot: false
   debug: false
-  anim: true
+  anim: false
   body_point_params:
     spacing: 3
     margin: 0
@@ -74,18 +66,18 @@ optim:
     print_time: 0
   s_opts:
     print_level: 0
-    max_cpu_time: 2.0
+    max_cpu_time: 4.0
 
 ### SIMULATION PARAMS
 sim:
-  t_max: 2000000              # max number of iterations in simulation loop
+  t_max: 50000              # max number of iterations in simulation loop
   steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
   save: false
   fps: 50
   show: true
-  plot_steps: 10
+  plot_steps: 5
   inf_stream: true
   move_yaxis_threshold: 10
 goal_offset: 30
@@ -108,10 +100,7 @@ ship:
              [35.4, -4.0]]
 sim_dynamics:
   vessel_model: 'AISship'
-  dt: 0.1
+  dt: 0.05
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30
-
-seamap_path: "ecco4_x0.pth"
-seanet_path: "seanet.pth"
