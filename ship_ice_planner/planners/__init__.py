@@ -15,4 +15,9 @@ try:
 except ImportError:
     pass
 
+try:
+    from .neural_mpc import neural_mpc_planner
+except ImportError:
+    pass
+
 from .straight import straight_planner
