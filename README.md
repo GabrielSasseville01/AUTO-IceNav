@@ -126,6 +126,10 @@ You will finally need to set the config file accordingly, e.g. in `config/debug_
 
 **Note**: this pre-generated dataset is set to our simulation location (indicated in the following section).
 
+You can alternative generate a random ice floes map:
+```
+  python -m ship_ice_planner.experiments.generate_rand_exp
+```
 
 ## Running the Simulator
 Our simulation is based on real ice-floe maps sampled from the Arctic Ocean and Beaufort Sea. Here follow the reference simulation details:
@@ -152,9 +156,11 @@ You can run the main simulation script with different controllers:
 
 You can additionally run the simulation in debug mod for development purposes:
 ```
-  python scripts/run_simulation.py data/experiment_configs.pkl configs/debug_model.yaml
+  python scripts/run_simulation.py data/experiment_configs.pkl configs/debug_mode.yaml
 ```
 Debug mode simplifies the simulation steps to minimize latency, the A* lattice planner is used by default. 
+
+> The folder `trajectories/` stores, for each method, simulation information that will be used for evaluation. At the beginning of the simulation, the polygon map and the cost map are stored in pickle files, along with the initially predicted path lines. At the end of the simulation, an additional path line will be stored along with a `.json` file reporting collision data and consumption. You can set the target path to store all this information through the field `analysis_save_path` in the yaml config file.
 
 ## Directory Structure
 

@@ -140,3 +140,6 @@ data/*.png
 data/*.csv
 *.pth
 *.pkl
+*.mp4
+analysis/*
+trajectories/*

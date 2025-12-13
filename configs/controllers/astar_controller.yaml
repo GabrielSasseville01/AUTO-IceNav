@@ -6,8 +6,8 @@
 # planning with model-based diffusion optimization for smoother trajectories.
 
 ### GLOBAL PARAMS
+analysis_save_path: "trajectories/astar"
 output_dir: null            # root directory for storing all experiment output files
-comments: 'Diffusion planner experiment'
 map_shape:
   - 600                    # length of ice channel in metres
   - 600                     # width of ice channel in metres

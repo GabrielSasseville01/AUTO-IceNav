@@ -2,6 +2,7 @@
 Aggregates all plotting objects into a single class
 """
 import os
+import pickle
 import time
 from typing import List, Tuple, Union
 
@@ -74,6 +75,7 @@ class Plot:
 
     def __init__(
             self,
+            trajectory_savepath: str = None,
             costmap: np.ndarray = None,
             obstacles: List = None,
             path: np.ndarray = None,
@@ -111,6 +113,7 @@ class Plot:
         self.map = bool(map_figsize)
         self.sim = bool(sim_figsize)
 
+        self.trajectory_savepath = trajectory_savepath
         self.path = path  # shape is 3 x n
         self.horizon = horizon if horizon != np.inf else None
         self.goal = goal
@@ -123,54 +126,86 @@ class Plot:
             # we have a list of obstacles
             obstacles = [obs['vertices'] for obs in obstacles]
 
+        self._obstacles_data = [np.array(obs) for obs in obstacles] if obstacles else []
+
         if self.map:
             ##########################################
             # --- initialize the map plot --- #
             self.map_artists = []
             self.sea_currents_subsample = sea_currents_subsample
 
-            # create the figure with appropriate number of subplots
-            n_extra_plots = int(bool(nodes_expanded)) + int(sea_currents is not None) + int(ridge_costmap is not None)
-            if n_extra_plots > 0:
-                n_subplots = 1 + n_extra_plots
-                self.map_fig, axes = plt.subplots(1, n_subplots,
-                                                  figsize=(map_figsize[0] * n_subplots / 2, map_figsize[1]),
-                                                  sharex='all', sharey='all')
-                # Add spacing between subplots to prevent y-axis label overlap
-                self.map_fig.subplots_adjust(wspace=0.5)
-                
-                ax_idx = 0
-                # assign axes based on what's provided
-                if nodes_expanded:
-                    self.node_ax = axes[ax_idx]
-                    ax_idx += 1
-                    # plot the nodes that were expanded
-                    self.node_scat = None
-                    self.create_node_plot(nodes_expanded)
-                    self.map_artists.extend([self.node_scat, self.node_ax.yaxis])
-                
-                if sea_currents is not None:
-                    self.sea_ax = axes[ax_idx]
-                    ax_idx += 1
-                    # plot the sea current vector field
-                    self.sea_quiver = None
-                    self.create_sea_currents_plot(sea_currents)
-                    self.map_artists.extend([self.sea_quiver, self.sea_ax.yaxis])
-                
-                if ridge_costmap is not None:
-                    self.ridge_ax = axes[ax_idx]
-                    ax_idx += 1
-                    # plot the ridge density map (will set limits after map_ax is created)
-                    self.ridge_image = None
-                
-                self.map_ax = axes[ax_idx]
-                # show the ticks for the map plot
-                self.map_ax.xaxis.set_tick_params(labelbottom=True)
-                self.map_ax.yaxis.set_tick_params(labelleft=True)
+            self._static_background_saved = False
+            self._static_background_paths = {}
 
-            else:
-                self.map_fig, self.map_ax = plt.subplots(1, 1, figsize=map_figsize)
+            # create the figure with appropriate number of subplots
+            n_extra_plots = (
+                int(bool(nodes_expanded))
+                + int(sea_currents is not None)
+                + int(ridge_costmap is not None)
+            )
+            base_map_axes = 2  # costmap + render polygon view
+            n_subplots = base_map_axes + n_extra_plots
+            fig_width = map_figsize[0] * max(1, n_subplots / 2)
+            self.map_fig, axes = plt.subplots(
+                1,
+                n_subplots,
+                figsize=(fig_width, map_figsize[1]),
+                sharex='all',
+                sharey='all'
+            )
+            # Add spacing between subplots to prevent y-axis label overlap
+            self.map_fig.subplots_adjust(wspace=0.5)
+            axes = np.atleast_1d(axes)
+            
+            ax_idx = 0
+            # assign axes based on what's provided
+            if nodes_expanded:
+                self.node_ax = axes[ax_idx]
+                ax_idx += 1
+                # plot the nodes that were expanded
+                self.node_scat = None
+                self.create_node_plot(nodes_expanded)
+                self.map_artists.extend([self.node_scat, self.node_ax.yaxis])
+            
+            if sea_currents is not None:
+                self.sea_ax = axes[ax_idx]
+                ax_idx += 1
+                # plot the sea current vector field
+                self.sea_quiver = None
+                self.create_sea_currents_plot(sea_currents)
+                self.map_artists.extend([self.sea_quiver, self.sea_ax.yaxis])
+            
+            if ridge_costmap is not None:
+                self.ridge_ax = axes[ax_idx]
+                ax_idx += 1
+                # plot the ridge density map (will set limits after map_ax is created)
+                self.ridge_image = None
+            
+            self.map_ax = axes[ax_idx]
+            ax_idx += 1
+            # show the ticks for the map plot
+            self.map_ax.xaxis.set_tick_params(labelbottom=True)
+            self.map_ax.yaxis.set_tick_params(labelleft=True)
+
             self.map_artists.append(self.map_ax.yaxis)
+
+            # Initialize render axis (polygon view)
+            self.render_ax = axes[ax_idx]
+            self.render_ax.xaxis.set_tick_params(labelbottom=True)
+            self.render_ax.yaxis.set_tick_params(labelleft=True)
+            self.render_ax.set_facecolor(OPEN_WATER_COLOR)
+            self.render_ax.patch.set_alpha(0.7)
+            self.render_ax.set_title('Polygon Map')
+            self.render_ax.set_aspect('equal')
+            self.render_ax.set_xlabel('x (m)')
+            self.render_ax.set_ylabel('y (m)')
+            if scale != 1:
+                self.scale_axis_labels(self.render_ax, scale)
+            self.render_path_line = None
+            self.render_global_path_line = None
+            self.render_ship_state_line = None
+            self.render_obs_gradient_patches = []
+            self.map_artists.append(self.render_ax.yaxis)
 
             # plot the costmap
             if costmap is not None:
@@ -222,6 +257,11 @@ class Plot:
                     PatchCollection(self.obs_patches, match_original=True)
                 )
                 self.map_artists.append(self.obs_patch_collection)
+                if hasattr(self, 'render_ax'):
+                    self.render_obs_gradient_patches = []
+                    for obs in obstacles:
+                        self.render_obs_gradient_patches.extend(add_gradient_polygon(self.render_ax, obs))
+                    self.map_artists.extend(self.render_obs_gradient_patches)
 
             # show the path
             if self.path is not None:
@@ -232,12 +272,30 @@ class Plot:
                 else:
                     self.path_line, = self.map_ax.plot(self.path[0], self.path[1], PLANNED_PATH_COLOR)
                 self.map_artists.append(self.path_line)
+                if hasattr(self, 'render_ax'):
+                    if global_path is not None:
+                        self.render_global_path_line, = self.render_ax.plot(
+                            global_path[0], global_path[1], 'c--', label='global'
+                        )
+                        self.render_global_path_line.set_zorder(40)
+                        self.map_artists.append(self.render_global_path_line)
+                    self.render_path_line, = self.render_ax.plot(
+                        self.path[0], self.path[1], PLANNED_PATH_COLOR, label='optimized'
+                    )
+                    # Ensure the planned path stays above polygons and other overlays
+                    self.render_path_line.set_zorder(50)
+                    self.map_artists.append(self.render_path_line)
 
             # show the ship position
             if ship_pos is not None:
                 self.ship_state_line, = self.map_ax.plot(ship_pos[0], ship_pos[1], SHIP_ACTUAL_PATH_COLOR,
                                                          linewidth=1, label='Actual path')
                 self.map_artists.append(self.ship_state_line)
+                if hasattr(self, 'render_ax'):
+                    self.render_ship_state_line, = self.render_ax.plot(
+                        ship_pos[0], ship_pos[1], SHIP_ACTUAL_PATH_COLOR, linewidth=1, label='Actual path'
+                    )
+                    self.map_artists.append(self.render_ship_state_line)
 
             # plot the nodes along the path
             if len(path_nodes) != 0:
@@ -299,6 +357,12 @@ class Plot:
 
             self.map_ax.set_xlabel('x (m)')
             self.map_ax.set_ylabel('y (m)')
+
+            # Persist static backgrounds once the initial figure is ready
+            analysis_dir = self.trajectory_savepath or self.save_fig_dir
+            paths = self.save_static_map_backgrounds(analysis_dir)
+            if paths:
+                print(f"Static maps stored in: {paths}")
 
             if show:
                 plt.show(block=False)
@@ -436,7 +500,7 @@ class Plot:
             elif show:  # cannot show and save at the same time
                 plt.show(block=False)
                 plt.pause(0.1)
-
+    
     def update_map(self, cost_map: np.ndarray = None, ridge_costmap: np.ndarray = None) -> None:
         if cost_map is not None:
             self.costmap_image.set_data(cost_map)
@@ -462,10 +526,17 @@ class Plot:
 
             if global_path is not None:
                 self.global_path_line.set_data(global_path[0], global_path[1])
+            if global_path is not None and hasattr(self, 'render_global_path_line') and \
+                    self.render_global_path_line is not None:
+                self.render_global_path_line.set_data(global_path[0], global_path[1])
             self.path_line.set_data(path[0], path[1])
+            if hasattr(self, 'render_path_line') and self.render_path_line is not None:
+                self.render_path_line.set_data(path[0], path[1])
 
             if ship_state is not None:
                 self.ship_state_line.set_data(ship_state[0], ship_state[1])
+                if hasattr(self, 'render_ship_state_line') and self.render_ship_state_line is not None:
+                    self.render_ship_state_line.set_data(ship_state[0], ship_state[1])
 
             if nodes_expanded:
                 self.create_node_plot(nodes_expanded)
@@ -581,6 +652,35 @@ class Plot:
                     self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
                         PatchCollection(self.ridge_obs_patches, match_original=True)
                     )
+
+            if hasattr(self, 'render_obs_gradient_patches') and hasattr(self, 'render_ax'):
+                patches_per_obs = ICE_GRADIENT_LAYERS + 1
+                expected_len = len(obstacles) * patches_per_obs
+                if expected_len != len(self.render_obs_gradient_patches):
+                    # Recreate gradient patches if obstacle count changed
+                    for patch in self.render_obs_gradient_patches:
+                        try:
+                            patch.remove()
+                        except ValueError:
+                            pass
+                    self.render_obs_gradient_patches = []
+                    for obs in obstacles:
+                        self.render_obs_gradient_patches.extend(add_gradient_polygon(self.render_ax, obs))
+                    self.map_artists.extend(self.render_obs_gradient_patches)
+                else:
+                    for obs_idx, ob in enumerate(obstacles):
+                        vertices = np.array(ob)
+                        centroid = np.mean(vertices, axis=0)
+                        base_idx = obs_idx * patches_per_obs
+                        clip_patch = patches.Polygon(vertices, closed=True, transform=self.render_ax.transData)
+                        for layer_idx in range(ICE_GRADIENT_LAYERS):
+                            scale = 1.0 - (layer_idx / ICE_GRADIENT_LAYERS) * 0.8
+                            scaled_vertices = centroid + scale * (vertices - centroid)
+                            patch_idx = base_idx + layer_idx
+                            self.render_obs_gradient_patches[patch_idx].set_xy(scaled_vertices)
+                            self.render_obs_gradient_patches[patch_idx].set_clip_path(clip_patch)
+                        outline_idx = base_idx + ICE_GRADIENT_LAYERS
+                        self.render_obs_gradient_patches[outline_idx].set_xy(vertices)
 
         if patch_fill and hasattr(self, 'obs_patch_collection'):
             self.obs_patch_collection.set_facecolor(patch_fill)
@@ -733,6 +833,164 @@ class Plot:
             else:
                 self.map_fig.savefig(fp, dpi=200)
             return fp
+
+    def save_static_map_backgrounds(
+            self,
+            save_fig_dir: str = None,
+            costmap_filename: str = 'costmap_background.pkl',
+            render_filename: str = 'polygon_background.pkl',
+            path_line_filename: str = 'path_lines.pkl'
+    ):
+        """
+        Persist reusable snapshots of the costmap background, polygon rendering, and the planned path line.
+        Results are stored as pickled matplotlib figures that can be reloaded and extended later.
+        """
+        if not self.map:
+            raise RuntimeError('Static map backgrounds can only be saved when map plotting is enabled.')
+        if not hasattr(self, 'render_ax'):
+            raise RuntimeError('Render axis not initialized; cannot save static backgrounds.')
+        if self._static_background_saved:
+            return self._static_background_paths
+
+        target_dir = save_fig_dir or self.save_fig_dir or '.'
+        if not os.path.isdir(target_dir):
+            os.makedirs(target_dir)
+
+        if not costmap_filename.lower().endswith('.pkl'):
+            costmap_filename += '.pkl'
+        if not render_filename.lower().endswith('.pkl'):
+            render_filename += '.pkl'
+        if not path_line_filename.lower().endswith('.pkl'):
+            path_line_filename += '.pkl'
+
+        def _hide_artists():
+            hidden = []
+            for art_name in (
+                    'path_line',
+                    'global_path_line',
+                    'ship_state_line',
+                    'render_path_line',
+                    'render_global_path_line',
+                    'render_ship_state_line'
+            ):
+                artist = getattr(self, art_name, None)
+                if artist is not None:
+                    hidden.append((artist, artist.get_visible()))
+                    artist.set_visible(False)
+            return hidden
+
+        def _restore_artists(hidden):
+            for artist, was_visible in hidden:
+                artist.set_visible(was_visible)
+
+        hidden_artists = _hide_artists()
+        self.map_fig.canvas.draw()
+
+        def _build_costmap_figure():
+            fig, ax = plt.subplots(figsize=self.map_ax.figure.get_size_inches())
+            if hasattr(self, 'costmap_image') and self.costmap_image is not None:
+                ax.imshow(
+                    self.costmap_image.get_array(),
+                    origin='lower',
+                    cmap=self.costmap_image.get_cmap(),
+                    vmin=self.costmap_image.get_clim()[0],
+                    vmax=self.costmap_image.get_clim()[1]
+                )
+            if hasattr(self, 'swath_image') and self.swath_image is not None:
+                ax.imshow(
+                    self.swath_image.get_array(),
+                    origin='lower',
+                    alpha=self.swath_image.get_alpha()
+                )
+            if self._obstacles_data:
+                for obs in self._obstacles_data:
+                    ax.add_patch(
+                        patches.Polygon(obs, True, fill=False, ec='k', linewidth=0.5)
+                    )
+            ax.set_xlim(self.map_ax.get_xlim())
+            ax.set_ylim(self.map_ax.get_ylim())
+            ax.set_aspect('equal')
+            ax.set_xlabel('x (m)')
+            ax.set_ylabel('y (m)')
+            ax.set_title('Costmap Background')
+            fig.tight_layout()
+            return fig
+
+        def _build_render_figure():
+            fig, ax = plt.subplots(figsize=self.map_ax.figure.get_size_inches())
+            ax.set_facecolor(OPEN_WATER_COLOR)
+            ax.patch.set_alpha(0.7)
+            if self._obstacles_data:
+                for obs in self._obstacles_data:
+                    add_gradient_polygon(ax, obs)
+            ax.set_xlim(self.render_ax.get_xlim())
+            ax.set_ylim(self.render_ax.get_ylim())
+            ax.set_aspect('equal')
+            ax.set_xlabel('x (m)')
+            ax.set_ylabel('y (m)')
+            ax.set_title('Polygon Background')
+            fig.tight_layout()
+            return fig
+
+        def _build_path_figure():
+            fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+            costmap_ax, render_ax = axes
+            if hasattr(self, 'path_line') and self.path_line is not None:
+                costmap_ax.plot(
+                    self.path_line.get_xdata(),
+                    self.path_line.get_ydata(),
+                    color=PLANNED_PATH_COLOR,
+                    label='Costmap path'
+                )
+                costmap_ax.set_aspect('equal')
+                costmap_ax.legend()
+            else:
+                costmap_ax.set_visible(False)
+            if hasattr(self, 'render_path_line') and self.render_path_line is not None:
+                render_ax.plot(
+                    self.render_path_line.get_xdata(),
+                    self.render_path_line.get_ydata(),
+                    color=PLANNED_PATH_COLOR,
+                    label='Polygon path'
+                )
+                render_ax.set_aspect('equal')
+                render_ax.legend()
+            else:
+                render_ax.set_visible(False)
+            fig.tight_layout()
+            fig.suptitle('Planned Path Lines')
+            fig.subplots_adjust(top=0.85)
+            return fig
+
+        costmap_fig = _build_costmap_figure()
+        render_fig = _build_render_figure()
+        path_fig = _build_path_figure()
+
+        costmap_path = os.path.join(target_dir, costmap_filename)
+        render_path = os.path.join(target_dir, render_filename)
+        path_line_path = os.path.join(target_dir, path_line_filename)
+
+        with open(costmap_path, 'wb') as fh:
+            pickle.dump(costmap_fig, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(render_path, 'wb') as fh:
+            pickle.dump(render_fig, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        with open(path_line_path, 'wb') as fh:
+            pickle.dump(path_fig, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+        plt.close(costmap_fig)
+        plt.close(render_fig)
+        plt.close(path_fig)
+
+        _restore_artists(hidden_artists)
+        self.map_fig.canvas.draw_idle()
+
+        self._static_background_saved = True
+        self._static_background_paths = {
+            'costmap': costmap_path,
+            'render': render_path,
+            'path_lines': path_line_path,
+        }
+        return self._static_background_paths
 
     def create_node_plot(self, nodes_expanded: dict):
         c, data = self.aggregate_nodes(nodes_expanded)

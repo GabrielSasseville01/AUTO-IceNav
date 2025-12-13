@@ -238,6 +238,10 @@ def diffusion_planner(cfg, debug=False, **kwargs):
         path_dir = os.path.join(cfg.output_dir, PATH_DIR) if cfg.output_dir else None
         if path_dir:
             os.makedirs(path_dir, exist_ok=True)
+        analysis_save_dir = getattr(cfg, 'analysis_save_path', None)
+        if analysis_save_dir:
+            os.makedirs(analysis_save_dir, exist_ok=True)
+
         if not cfg.plot.show and plot_dir:
             matplotlib.use('Agg')
         
@@ -378,7 +382,8 @@ def diffusion_planner(cfg, debug=False, **kwargs):
             logger.info('Average planner rate: {} Hz\n'.format(1 / np.mean(compute_time)))
             
             # Send path to simulation
-            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size))
+            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size),
+                            costmap=costmap.cost_map)
             
             t1 = time.time()
             
@@ -446,6 +451,7 @@ def diffusion_planner(cfg, debug=False, **kwargs):
                         path=optimized_path_scaled.T,
                         horizon=horizon,
                         global_path=path_compare.path,
+                        trajectory_savepath=analysis_save_dir
                     )
                 else:
                     if cfg.plot.show:

@@ -341,15 +341,12 @@ def batched_apply_drag_from_water(sqrt_areas, masses, velocities, angular_veloci
     Much faster version of `apply_drag_from_water`
     """
     speeds = np.linalg.norm(velocities, axis=1)
-    reference_mass = np.median(masses)
-
-    effective_masses = masses * (1 + 0.5 * (masses / reference_mass))
     new_velocities = velocities + dt * (
         DRAG_FORCE_CONSTANT
         * sqrt_areas[:, None]
         * speeds[:, None]
         * -velocities
-    ) / effective_masses[:, None]
+    ) / masses[:, None]
     new_angular_velocities = angular_velocities * (1 - ANGULAR_VELOCITY_DECAY)
     
     # new_velocities = velocities

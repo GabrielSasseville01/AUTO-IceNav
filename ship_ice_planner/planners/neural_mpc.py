@@ -329,7 +329,7 @@ def neural_mpc_planner(cfg, debug=False, **kwargs):
         
         # Get neural MPC configuration
         nmpc_cfg = cfg.get('neural_mpc', {})
-        model_path = nmpc_cfg.get('model_path', 'neural_mpc_models/best_model.pth')
+        model_path = nmpc_cfg.get('nmpc_model_weights', 'data/nmpc_baseline.pth')
         
         if not PathLib(model_path).exists():
             logger.error(f'Neural MPC model not found at {model_path}!')
@@ -400,6 +400,11 @@ def neural_mpc_planner(cfg, debug=False, **kwargs):
         if not cfg.plot.show and plot_dir:
             matplotlib.use('Agg')
         
+        # Optional directory for analysis artifacts (costmap/polygon backgrounds, path lines, etc.)
+        analysis_save_dir = getattr(cfg, 'analysis_save_path', None)
+        if analysis_save_dir:
+            os.makedirs(analysis_save_dir, exist_ok=True)
+
         # Planning state variables
         replan_count = 0
         compute_time = []
@@ -582,7 +587,8 @@ def neural_mpc_planner(cfg, debug=False, **kwargs):
             path_real_world_scale = smooth_path(path_real_world_scale)
             
             # Then resample to desired density
-            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size))
+            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size),
+                            costmap=costmap.cost_map)
             
             # Log metrics
             metrics.put_scalars(
@@ -622,15 +628,61 @@ def neural_mpc_planner(cfg, debug=False, **kwargs):
             
             replan_count += 1
             
-            # Store actual path for visualization
-            if plot_dir and cfg.plot.show and replan_count % 10 == 0:
-                ship_actual_path[0].append(ship_pos[0] / costmap.scale)
-                ship_actual_path[1].append(ship_pos[1] / costmap.scale)
+            # Visualization of planner state (costmap + polygon map)
+            if cfg.plot.show or plot_dir:
+                ship_actual_path[0].append(ship_pos[0])
+                ship_actual_path[1].append(ship_pos[1])
+
+                optimized_path_scaled = np.copy(path_real_world_scale)
+                if optimized_path_scaled.ndim == 2 and optimized_path_scaled.shape[1] >= 2:
+                    optimized_path_scaled[:, 0] *= costmap.scale
+                    optimized_path_scaled[:, 1] *= costmap.scale
+                else:
+                    optimized_path_scaled = optimized_path_scaled * costmap.scale
+
+                path_for_plot = optimized_path_scaled.T if optimized_path_scaled.ndim == 2 else optimized_path_scaled
+
+                aligned_ridge = getattr(costmap, 'get_aligned_ridge_costmap', lambda: None)()
+
+                if plot is None:
+                    plot_args = dict(
+                        costmap=costmap.cost_map,
+                        obstacles=costmap.all_obstacles,
+                        ship_vertices=ship.vertices,
+                        ship_pos=ship_pos,
+                        nodes_expanded=nodes_expanded,
+                        sim_figsize=None,
+                        scale=costmap.scale,
+                        y_axis_limit=cfg.map_shape[0] * costmap.scale,
+                        save_fig_dir=plot_dir,
+                        show=cfg.plot.show,
+                        swath=path_compare.swath,
+                        ridge_costmap=aligned_ridge,
+                        path=path_for_plot,
+                        horizon=horizon,
+                        global_path=path_compare.path,
+                    )
+                    plot = Plot(**plot_args, trajectory_savepath=analysis_save_dir)
+                else:
+                    plot.update_path(
+                        path_for_plot,
+                        path_compare.swath,
+                        global_path=path_compare.path,
+                        nodes_expanded=nodes_expanded,
+                        ship_state=ship_actual_path,
+                    )
+                    plot.update_obstacles(costmap.all_obstacles)
+                    plot.update_ship(ship.vertices, *ship_pos)
+                    plot.update_map(costmap.cost_map, ridge_costmap=aligned_ridge)
+                    plot.animate_map(suffix=replan_count)
         
         logger.info('Neural MPC planner finished')
         logger.info('Total replans: {}'.format(replan_count))
         logger.info('Average compute time: {} s'.format(np.mean(compute_time) if compute_time else 0))
-        
+
+        if plot is not None:
+            plot.close()
+
         return metrics.get_history()
         
     except Exception as e:

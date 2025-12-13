@@ -6,16 +6,15 @@
 # planning with model-based diffusion optimization for smoother trajectories.
 
 ### GLOBAL PARAMS
-output_trajectory_file: "debug_trajectory.json"
+analysis_save_path: "trajectories/nmpc"
 output_dir: null            # root directory for storing all experiment output files
-comments: 'Diffusion planner experiment'
 map_shape:
   - 600                    # length of ice channel in metres
   - 600                     # width of ice channel in metres
 map_file: "data/MEDEA_fram_20100629.pkl"
 plot:
   y_axis_limit: 600         # limit in metres for the y-axis of the plot
-  show: false               # true will show planner plots
+  show: true               # true will show planner plots
 seed: 1
 
 ### PLANNER PARAMS
@@ -24,25 +23,40 @@ save_paths: false           # if true save planned paths to disk
 path_step_size: 0.02        # spacing in meters between points on planned path
 
 # CHANGED: Use diffusion planner instead of lattice
-planner: 'diffusion'        # path planner: 'skeleton', 'straight', 'lattice', or 'diffusion'
+planner: 'neural_mpc'        # path planner: 'skeleton', 'straight', 'lattice', or 'diffusion'
                             # 'diffusion' combines A* discrete planning with diffusion optimization
 
-### DIFFUSION PLANNER SPECIFIC PARAMS
-# These parameters control the diffusion optimization step
-diffusion:
-  noise_clipping: 5        # clip the diffusion noise to this value
-  horizon: 8              # prediction horizon for diffusion (number of steps)
-  num_samples: 32          # number of trajectory samples per diffusion step
-  num_diffusion_steps: 32   # number of diffusion iterations (more = better but slower)
-  temperature: 0.1          # temperature for softmax weighting (lower = more greedy)
-  beta0: 0.0001             # initial beta for diffusion noise schedule
-  betaT: 0.01               # final beta for diffusion noise schedule
+neural_mpc:
+  # Path to trained Neural MPC model weights
+  nmpc_model_weights: 'data/nmpc_baseline.pth'
+  
+  # Planning horizon (number of points in predicted path)
+  horizon: 200
+  
+  # Gradient-based optimization settings
+  use_gradient_optimization: true      # Enable gradient optimization with costmap
+  optimization_steps: 10               # Number of gradient descent steps
+  learning_rate: 0.01                  # Learning rate for gradient optimization
+  
+  # Neural network architecture parameters
+  max_discrete_nodes: 50               # Maximum discrete A* waypoints to process
+  num_spline_control_points: 15        # Number of spline control points to predict
+  
+  # Critic network settings (optional, for learned value estimation)
+  use_critic: false                    # Whether to use a learned critic for path evaluation
+  critic_path: null                    # Path to trained critic model (if use_critic is true)
+  
+  # Discrete plan densification settings
+  discrete_densify_step_size: 5.0      # Step size (meters) for densifying discrete A* plan
+  min_discrete_points: 20              # Minimum points after densification
+  max_discrete_points: 100             # Maximum points after densification
+
 
 # A* parameters (used for initial discrete path)
 a_star:
   weight: 1                 # static weighting for weighed A* f(n) = g(n) + w * h(n) where weight > 1
 costmap:
-  scale: 0.25                # scale factor of the costmap which gives a resolution of 1/scale x 1/scale metres
+  scale: 0.5                # scale factor of the costmap which gives a resolution of 1/scale x 1/scale metres
   collision_cost_weight:
    0.5               # multiplier for the collision cost (0.00000048)
   obs_cost_buffer_factor:
@@ -50,9 +64,12 @@ costmap:
   ice_resistance_weight: 1  # power to raise the ice concentration term to
   sic_kernel: [51, 51]      # the size of the kernel for computing sea ice concentration map
   boundary_margin: 2        # margin in metres on either side of the ice channel to set as boundary
+  ridge_costmap_file: "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl"  # Ridge density costmap for path planning
+  ridge_cost_weight: 1.0    # Weight for ridge avoidance (higher = avoid ridges more strongly)
+  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"  # Polygon file for aligning ridge density with ice floes
 prim:
   prim_name: 'PRIM_8H_4'    # name of the set of primitives to use
-  scale: 20                 # scale factor of the primitives
+  scale: 15                 # scale factor of the primitives
   step_size: 0.5            # step size for sampling points on the path
 
 # Optimization step (can be disabled for diffusion planner since diffusion handles optimization)
@@ -75,20 +92,20 @@ optim:
     print_time: 0
   s_opts:
     print_level: 0
-    max_cpu_time: 2.0
+    max_cpu_time: 4.0
 
 ### SIMULATION PARAMS
 sim:
-  t_max: 2000              # max number of iterations in simulation loop
+  t_max: 50000              # max number of iterations in simulation loop
   steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
-  save: false
-  fps: 50
-  show: true
-  plot_steps: 10
-  inf_stream: true
-  move_yaxis_threshold: 10
+  save: false               # if true, save animation videos to MP4 files (sim.mp4 and costmap.mp4)
+  fps: 50                  # frames per second for saved animations
+  show: true               # if true, show live animation (cannot show and save at the same time)
+  plot_steps: 5            # steps between plot updates
+  inf_stream: true         # if true, animation view moves with ship
+  move_yaxis_threshold: 10 # distance traveled before y-axis moves
 goal_offset: 30
 
 ### SHIP MODEL AND CONTROLLER PARAMS
@@ -109,10 +126,7 @@ ship:
              [35.4, -4.0]]
 sim_dynamics:
   vessel_model: 'AISship'
-  dt: 0.1
+  dt: 0.05
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30
-
-seamap_path: "ecco4_x0.pth"
-seanet_path: "seanet.pth"

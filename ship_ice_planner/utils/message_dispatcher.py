@@ -159,9 +159,13 @@ class MessageDispatcher:
                 self.shutdown = True
                 self.queue.close()
 
-    def send_message(self, path: np.ndarray):
+    def send_message(self, path: np.ndarray, costmap: np.ndarray = None):
         """
-        Sends path to controller [(x1, y1, psi_1),...,(xn, yn, psi_n)]
+        Sends path and optionally costmap data to controller/sim
+        
+        Args:
+            path: Array of waypoints [(x1, y1, psi_1),...,(xn, yn, psi_n)]
+            costmap: Optional 2D numpy array with costmap data for visualization/logging
         """
         if self.pipe:
             if len(path) == 0:
@@ -170,8 +174,15 @@ class MessageDispatcher:
             if self.transform:
                 path = self.transform(path, coord='world')
             self.logger.info('\033[92mSending path of size {}...\033[0m'.format(path.shape))
+            
+            # Build message dict with path and optional costmap
+            message = {'path': path}
+            if costmap is not None:
+                message['costmap'] = costmap
+                self.logger.info('Including costmap of shape {} in message'.format(costmap.shape))
+            
             try:
-                self.pipe.send(path)  # blocking call
+                self.pipe.send(message)  # blocking call
             except BrokenPipeError:
                 self.logger.warning('\033[93mPipe is broken!\033[0m')
                 self.shutdown = True

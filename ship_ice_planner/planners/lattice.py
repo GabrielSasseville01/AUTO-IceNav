@@ -90,11 +90,14 @@ def lattice_planner(cfg, debug=False, **kwargs):
         # directory to store plots
         plot_dir = os.path.join(cfg.output_dir, PLANNER_PLOT_DIR) if cfg.output_dir else None
         if plot_dir:
-            os.makedirs(plot_dir)
+            os.makedirs(plot_dir, exist_ok=True)
         # directory to store generated path at each iteration
         path_dir = os.path.join(cfg.output_dir, PATH_DIR) if cfg.output_dir else None
         if path_dir:
-            os.makedirs(path_dir)
+            os.makedirs(path_dir, exist_ok=True)
+        analysis_save_dir = getattr(cfg, 'analysis_save_path', None)
+        if analysis_save_dir:
+            os.makedirs(analysis_save_dir, exist_ok=True)
         if not cfg.plot.show and plot_dir:
             matplotlib.use('Agg')
 
@@ -242,7 +245,8 @@ def lattice_planner(cfg, debug=False, **kwargs):
 
             # send path, return path in real world coordinates
             # shape will be n x 3
-            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size))
+            md.send_message(resample_path(path_real_world_scale, cfg.path_step_size),
+                            costmap=costmap.cost_map)
 
             t1 = time.time()  # second timer to check how long logging and plotting take
 
@@ -322,6 +326,7 @@ def lattice_planner(cfg, debug=False, **kwargs):
                             path=optimized_path,
                             horizon=cfg.optim.horizon * costmap.scale,
                             global_path=path_compare.path,
+                            trajectory_savepath=analysis_save_dir
                         )
 
                     else:
@@ -330,6 +335,7 @@ def lattice_planner(cfg, debug=False, **kwargs):
                             path=path_compare.path,
                             horizon=horizon,
                             path_nodes=(node_path[0], node_path[1]),
+                            trajectory_savepath=analysis_save_dir
                         )
                     # for even more debugging
                     # plot.show_prims_from_nodes_edges(plot.map_ax, prim, node_path.T, edge_seq)

@@ -59,7 +59,7 @@ prim:
 optim:
   plot: false
   debug: false
-  anim: true
+  anim: false
   body_point_params:
     spacing: 3
     margin: 0
@@ -85,9 +85,9 @@ sim:
 anim:
   save: false
   fps: 50
-  show: true
+  show: false
   plot_steps: 10
-  inf_stream: true
+  inf_stream: false
   move_yaxis_threshold: 10
 goal_offset: 30
 

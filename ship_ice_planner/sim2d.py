@@ -3,6 +3,7 @@ import math
 import os
 import random
 import time
+import json
 from multiprocessing import Process, Pipe, Queue
 from queue import Empty, Full
 
@@ -250,9 +251,15 @@ def sim(
         # )
     ))
 
-    # get path
-    path = conn_recv.recv()
-    path = np.asarray(path)
+    # get path and optional costmap from planner
+    msg = conn_recv.recv()
+    # Handle both dict format (new) and array format (legacy)
+    if isinstance(msg, dict):
+        path = np.asarray(msg['path'])
+        planner_costmap = msg.get('costmap', None)
+    else:
+        path = np.asarray(msg)
+        planner_costmap = None
 
     # setup trajectory tracking
     sim_dynamics.init_trajectory_tracking(path)
@@ -270,13 +277,17 @@ def sim(
     if sim_dynamics.vessel_model_name == 'AISship':
         sea_currents_data = sim_dynamics.vessel_model.sea_x[0].detach().numpy()  # (H, W, 2)
 
+    if "analysis_save_path" not in cfg:
+        cfg.analysis_save_path = None
+        
     if cfg.anim.show or cfg.anim.save:
         plot = Plot(obstacles=obstacles, path=path.T, legend=False, track_fps=True, y_axis_limit=cfg.plot.y_axis_limit,
                     ship_vertices=cfg.ship.vertices, target=sim_dynamics.setpoint[:2], inf_stream=cfg.anim.inf_stream,
                     ship_pos=state.eta, map_figsize=None, sim_figsize=(10, 10), remove_sim_ticks=True, goal=goal[1],
                     save_fig_dir=save_fig_dir, map_shape=cfg.map_shape,
                     save_animation=cfg.anim.save, anim_fps=cfg.anim.fps,
-                    sea_currents=sea_currents_data, sea_currents_subsample=30
+                    sea_currents=sea_currents_data, sea_currents_subsample=30,
+                    trajectory_savepath=cfg.analysis_save_path
                     )
         def on_close(event):
             nonlocal running
@@ -405,11 +416,18 @@ def sim(
                 # check for path
                 if conn_recv.poll():
                     msg = conn_recv.recv()
+                    # Handle both dict format (new) and array format (legacy)
+                    if isinstance(msg, dict):
+                        msg_path = msg.get('path', [])
+                        if msg.get('costmap') is not None:
+                            planner_costmap = msg['costmap']
+                    else:
+                        msg_path = msg
                     # confirm we have path
-                    if len(msg) == 0:
+                    if len(msg_path) == 0:
                         print('Error, received empty path!')
                     else:
-                        new_path = np.asarray(msg)  # n x 3
+                        new_path = np.asarray(msg_path)  # n x 3
                         # confirm path is a minimum of 2 points
                         if len(new_path) > 1:
                             path = new_path
@@ -910,6 +928,8 @@ def sim(
     except KeyboardInterrupt:
         print('\nReceived keyboard interrupt, exiting...')
 
+
+    # ====================== End of simulation ======================
     finally:
         print('\nDone simulation... Processing simulation data...')
 
@@ -932,8 +952,9 @@ def sim(
         final_sea_currents = None
         if sim_dynamics.vessel_model_name == 'AISship':
             final_sea_currents = sim_dynamics.vessel_model.sea_x[0].detach().numpy()
-        
+
         plot = Plot(
+            trajectory_savepath=cfg.analysis_save_path,
             obstacles=get_global_obs_coords(poly_vertices, batched_data[:, :2], batched_data[:, 2]),
             path=path.T, goal=goal[1], map_figsize=None, remove_sim_ticks=False, show=False,
             ship_pos=sim_data[['x', 'y']].to_numpy().T, map_shape=cfg.map_shape, legend=False,
@@ -995,5 +1016,30 @@ def sim(
         planner.terminate()
         if planner.is_alive():
             planner.join(timeout=2)
+
+        # Exporting to JSON all necessary stats for logging
+        if "output_trajectory_file" in cfg:
+            summary_path = os.path.join(cfg.analysis_save_path, "simulation_stats.json")
+            print(f"Logging trajctory file to {summary_path}")
+            simulation_time = time.time()
+            
+            # Get the actual ship trajectory from simulation data (not the planned path)
+            # sim_data contains x, y, psi columns for the actual ship positions
+            actual_trajectory = sim_data[['x', 'y', 'psi']].to_numpy().T.tolist()
+            
+            simulation_logfile = {
+                "time": simulation_time,
+                "config": cfg.__dict__,
+                "trajectories": {
+                    "ridge_resistance_history": ridge_resistance_history,
+                    "ridge_history": ridge_history,
+                    "ridge_thickness_history": ridge_thickness_history,
+                    "controller_path": actual_trajectory,  # Actual ship trajectory, not planned path
+                    "costmap": planner_costmap.tolist() if planner_costmap is not None else None,
+                },
+            }
+            with open(summary_path, "w") as f:
+                json.dump(simulation_logfile, f)
+                f.close()
 
         print('Done')
