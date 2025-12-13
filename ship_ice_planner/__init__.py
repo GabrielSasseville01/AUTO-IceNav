@@ -10,8 +10,7 @@ FULL_SCALE_SIM_EXP_CONFIG = 'data/experiment_configs.pkl'
 NRC_OEB_SIM_EXP_CONFIG = 'data/demo_NRC_OEB_data.pkl'
 NRC_ICE_SIM_EXP_CONFIG = 'data/demo_NRC_ice_tank_data.pkl'
 NRC_OEB_SIM_PARAM_CONFIG = 'configs/NRC_OEB_config.yaml'
-# FULL_SCALE_SIM_PARAM_CONFIG = 'configs/sim2d_config.yaml'
-FULL_SCALE_SIM_PARAM_CONFIG = 'configs/sim2d_diffusion_config.yaml'
+FULL_SCALE_SIM_PARAM_CONFIG = 'configs/sim2d_config.yaml'
 
 
 try:

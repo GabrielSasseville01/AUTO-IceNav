@@ -76,6 +76,10 @@ You will need to adjust your `.yaml` config file:
 
 Alternatively, the randomly generated map from default `.pkl` data files will be loaded.
 
+## Quick experimental run
+```
+  python demo_sim2d_ship_ice_navigation.py data/experiment_configs.pkl configs/sim2d_diffusion_config.yaml
+```
 
 ## Simulator
 

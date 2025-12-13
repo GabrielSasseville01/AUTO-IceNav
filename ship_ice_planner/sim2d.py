@@ -177,7 +177,7 @@ def sim(
     ship_shape.collision_type = 1  # for collision callbacks
     ship_body = ship_shape.body
 
-    # polygons for ice floes
+    # ==================== Map generation ====================
     polygons = generate_sim_obs(space, obs_dicts)
     poly_vertices = []  # generate these once
     ice_floe_states = {}  # Track floe states for fracturing
@@ -210,6 +210,7 @@ def sim(
     
     floe_masses = np.array([poly.mass for poly in polygons])  # may differ slightly from the mass in the exp config
     
+    # ==================== Setting planner and simulation ====================
     # Ridge tracking
     ridge_zones = []  # List of active ridge zones
     ridge_check_counter = 0  # Counter for periodic ridge checking
@@ -256,7 +257,7 @@ def sim(
     # setup trajectory tracking
     sim_dynamics.init_trajectory_tracking(path)
 
-    # initialize plotting / animation
+    # ==================== Plotting ====================
     plot = None
     running = True
     save_fig_dir = os.path.join(cfg.output_dir, PLOT_DIR) if cfg.output_dir else None
@@ -268,7 +269,7 @@ def sim(
     sea_currents_data = None
     if sim_dynamics.vessel_model_name == 'AISship':
         sea_currents_data = sim_dynamics.vessel_model.sea_x[0].detach().numpy()  # (H, W, 2)
-    
+
     if cfg.anim.show or cfg.anim.save:
         plot = Plot(obstacles=obstacles, path=path.T, legend=False, track_fps=True, y_axis_limit=cfg.plot.y_axis_limit,
                     ship_vertices=cfg.ship.vertices, target=sim_dynamics.setpoint[:2], inf_stream=cfg.anim.inf_stream,
@@ -290,6 +291,7 @@ def sim(
     iteration = 0    # to keep track of simulation steps
     t = time.time()  # to keep track of time taken for each sim iteration
 
+    # ==================== Main simulation loop ====================
     try:
         # main simulation loop
         while True:

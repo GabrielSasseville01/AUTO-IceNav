@@ -67,6 +67,7 @@ INIT_VELOCITY = 0.0  # m/s (was 1e-2 for "numerical stability" but causes initia
 ICE_SMALL_DISTURBANCE = 0.01  # should be some small number, this multiplies the mass of the object
 LARGE_SPEED_THRESHOLD = 10.  # m/s
 MAX_COLLISION_FORCE_VECTOR_ON_SHIP = [1.5e6, 1.5e6, 1e8]  # ref8 -- N, N, Nm
+DRAG_MASS_EXPONENT = 3.0
 
 
 def init_pymunk_space():
@@ -340,22 +341,19 @@ def batched_apply_drag_from_water(sqrt_areas, masses, velocities, angular_veloci
     Much faster version of `apply_drag_from_water`
     """
     speeds = np.linalg.norm(velocities, axis=1)
-
     reference_mass = np.median(masses)
-    # Mass factor: heavier floes get MORE drag (values > 1 for heavy, < 1 for light)
-    mass_factor = (masses / reference_mass) ** 2  # Square root for gentler scaling
 
-    norm_masses = masses[:, None]
-    norm_masses = (norm_masses - norm_masses.mean()) / (norm_masses.std() + 1e-10)
+    effective_masses = masses * (1 + 0.5 * (masses / reference_mass))
     new_velocities = velocities + dt * (
         DRAG_FORCE_CONSTANT
         * sqrt_areas[:, None]
         * speeds[:, None]
-        * mass_factor[:, None]
         * -velocities
-    ) / masses[:, None]
-
+    ) / effective_masses[:, None]
     new_angular_velocities = angular_velocities * (1 - ANGULAR_VELOCITY_DECAY)
+    
+    # new_velocities = velocities
+    # new_angular_velocities = angular_velocities
 
     v_arr = np.ravel(np.r_[[ship_velocity],  # leave ship velocity unchanged
                            np.c_[new_velocities, new_angular_velocities]])
