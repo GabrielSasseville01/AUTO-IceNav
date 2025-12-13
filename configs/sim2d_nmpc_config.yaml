@@ -1,43 +1,46 @@
 #############################################################################
-# Config for ship ice navigation with DIFFUSION planner in 2D simulation    #
+# Config for ship ice navigation with Neural MPC planner in 2D simulation  #
 #############################################################################
-# This config is based on sim2d_config.yaml but uses the diffusion planner
-# instead of the lattice planner. The diffusion planner combines A* discrete
-# planning with model-based diffusion optimization for smoother trajectories.
+# This config is based on sim2d_diffusion_config.yaml but uses the neural MPC
+# planner instead. The neural MPC uses a trained neural network to predict
+# continuous paths from discrete A* plans, with optional gradient-based optimization.
 
 ### GLOBAL PARAMS
 output_dir: null            # root directory for storing all experiment output files
-comments: 'Diffusion planner experiment'
+comments: 'Neural MPC planner experiment'
 map_shape:
   - 600                    # length of ice channel in metres
   - 600                     # width of ice channel in metres
 map_file: "data/MEDEA_fram_20100629.pkl"
 plot:
   y_axis_limit: 600         # limit in metres for the y-axis of the plot
-  show: true               # true will show planner plots
+  show: false              # true will show planner plots (set false for neural MPC)
 seed: 1
 
 ### PLANNER PARAMS
 horizon: 500.               # distance in metres for the horizon distance
 save_paths: false           # if true save planned paths to disk
-path_step_size: 0.02        # spacing in meters between points on planned path
+path_step_size: 0.2        # spacing in meters between points on planned path
 
-# CHANGED: Use diffusion planner instead of lattice
-planner: 'diffusion'        # path planner: 'skeleton', 'straight', 'lattice', or 'diffusion'
-                            # 'diffusion' combines A* discrete planning with diffusion optimization
+# Use Neural MPC planner
+planner: 'neural_mpc'       # Neural model predictive control planner
 
-### DIFFUSION PLANNER SPECIFIC PARAMS
-# These parameters control the diffusion optimization step
-diffusion:
-  noise_clipping: 15        # clip the diffusion noise to this value
-  horizon: 32              # prediction horizon for diffusion (number of steps)
-  num_samples: 128          # number of trajectory samples per diffusion step
-  num_diffusion_steps: 128   # number of diffusion iterations (more = better but slower)
-  temperature: 0.1          # temperature for softmax weighting (lower = more greedy)
-  beta0: 0.0001             # initial beta for diffusion noise schedule
-  betaT: 0.01               # final beta for diffusion noise schedule
+### NEURAL MPC SPECIFIC PARAMS
+# These parameters control the neural MPC behavior
+# Now learns spline parameters instead of full trajectories
+neural_mpc:
+  model_path: 'neural_mpc_models/best_model.pth'  # Path to trained model
+  use_gradient_optimization: true  # Use gradient-based optimization with costmap
+  optimization_steps: 10    # Number of gradient steps for optimization
+  learning_rate: 0.1       # Learning rate for gradient optimization
+  horizon: 500              # Planning horizon (number of steps)
+  max_discrete_nodes: 50    # Maximum number of discrete nodes
+  num_spline_control_points: 15  # Number of B-spline control points to predict
+  discrete_densify_step_size: 5.0  # Interpolate discrete plan to have points every N meters
+  min_discrete_points: 20   # Minimum number of discrete points
+  max_discrete_points: 100  # Maximum number of discrete points
 
-# A* parameters (used for initial discrete path)
+# A* parameters (used for initial discrete path that gets densified)
 a_star:
   weight: 1                 # static weighting for weighed A* f(n) = g(n) + w * h(n) where weight > 1
 costmap:
@@ -49,15 +52,12 @@ costmap:
   ice_resistance_weight: 1  # power to raise the ice concentration term to
   sic_kernel: [51, 51]      # the size of the kernel for computing sea ice concentration map
   boundary_margin: 2        # margin in metres on either side of the ice channel to set as boundary
-  ridge_costmap_file: "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl"  # Ridge density costmap for path planning
-  ridge_cost_weight: 1.0    # Weight for ridge avoidance (higher = avoid ridges more strongly)
-  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"  # Polygon file for aligning ridge density with ice floes
 prim:
   prim_name: 'PRIM_8H_4'    # name of the set of primitives to use
   scale: 15                 # scale factor of the primitives
   step_size: 0.5            # step size for sampling points on the path
 
-# Optimization step (can be disabled for diffusion planner since diffusion handles optimization)
+# Optimization step (disabled for neural MPC since it handles optimization)
 optim:
   plot: false
   debug: false
@@ -69,7 +69,7 @@ optim:
     plot: false
   wp_spacing: 2
   goal_margin: 0.1
-  horizon: 500.
+  horizon: 500
   smooth_control_weight: 50000
   p_opts:
     ipopt.print_level: 0
@@ -85,12 +85,12 @@ sim:
   steps: 1                  # number of simulation steps per iteration
   planner_timeout: 5.0      # timeout in seconds for polling of planner updates
 anim:
-  save: true               # if true, save animation videos to MP4 files (sim.mp4 and costmap.mp4)
-  fps: 50                  # frames per second for saved animations
-  show: true               # if true, show live animation (cannot show and save at the same time)
-  plot_steps: 5            # steps between plot updates
-  inf_stream: true         # if true, animation view moves with ship
-  move_yaxis_threshold: 10 # distance traveled before y-axis moves
+  save: false
+  fps: 50
+  show: true
+  plot_steps: 5
+  inf_stream: true
+  move_yaxis_threshold: 10
 goal_offset: 30
 
 ### SHIP MODEL AND CONTROLLER PARAMS
@@ -115,3 +115,4 @@ sim_dynamics:
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30
+

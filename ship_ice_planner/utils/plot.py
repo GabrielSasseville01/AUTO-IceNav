@@ -18,6 +18,7 @@ from ship_ice_planner.geometry.utils import Rxy_3d, Rxy
 
 # file names
 ANIM_MOVIE_FILE = 'sim.mp4'
+MAP_MOVIE_FILE = 'costmap.mp4'
 DEFAULT_SAVE_FIG_FORMAT = 'pdf'
 # colors
 ICE_PATCH_COLOR         = 'lightgrey'  # 'white'
@@ -115,6 +116,8 @@ class Plot:
         self.goal = goal
         self.inf_stream = inf_stream
         self.save_fig_dir = save_fig_dir
+        self.save_animation = save_animation
+        self.anim_fps = anim_fps
 
         if len(obstacles) and type(obstacles[0]) is dict:
             # we have a list of obstacles
@@ -133,6 +136,8 @@ class Plot:
                 self.map_fig, axes = plt.subplots(1, n_subplots,
                                                   figsize=(map_figsize[0] * n_subplots / 2, map_figsize[1]),
                                                   sharex='all', sharey='all')
+                # Add spacing between subplots to prevent y-axis label overlap
+                self.map_fig.subplots_adjust(wspace=0.5)
                 
                 ax_idx = 0
                 # assign axes based on what's provided
@@ -190,6 +195,14 @@ class Plot:
             if ridge_costmap is not None:
                 self.create_ridge_costmap_plot(ridge_costmap)
                 self.map_artists.extend([self.ridge_image, self.ridge_ax.yaxis])
+                # Initialize ridge obstacle patches if obstacles are provided
+                if len(obstacles):
+                    self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                                             for obs in obstacles]
+                    self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
+                        PatchCollection(self.ridge_obs_patches, match_original=True)
+                    )
+                    self.map_artists.append(self.ridge_obs_patch_collection)
 
             if swath is not None:
                 # init swath image
@@ -231,6 +244,19 @@ class Plot:
                 self.nodes_line, = self.map_ax.plot(*path_nodes, 'bx')
                 self.map_artists.append(self.nodes_line)
 
+            # Initialize map animation writer if save_animation is enabled
+            if self.save_animation:
+                if self.save_fig_dir is None:
+                    self.save_fig_dir = '.'
+                elif not os.path.isdir(self.save_fig_dir):
+                    os.makedirs(self.save_fig_dir)
+                
+                self.map_moviewriter = FFMpegWriter(fps=self.anim_fps)
+                self.map_moviewriter.setup(self.map_fig, os.path.join(self.save_fig_dir, MAP_MOVIE_FILE), dpi=200)
+                self.map_fig.canvas.draw()
+            else:
+                self.map_moviewriter = None
+            
             # plot the goal line segment
             if self.horizon:
                 self.goal_line = self.map_ax.axhline(y=self.horizon + self.path[1, 0], color=GOAL_COLOR,
@@ -389,8 +415,7 @@ class Plot:
             self.sim_ax.set_aspect('equal')
 
             self.track_fps = track_fps
-            self.anim_fps = anim_fps
-            self.save_animation = save_animation
+            # save_animation and anim_fps already set earlier for both sim and map plots
 
             if self.track_fps and not self.save_animation:
                 self.fps_counter = []
@@ -534,6 +559,9 @@ class Plot:
                     if len(self.ridge_obs_patches) == len(obstacles):
                         for patch, obs in zip(self.ridge_obs_patches, obstacles):
                             patch.set_xy(obs)
+                        # Refresh the collection to ensure updates are visible
+                        if hasattr(self, 'ridge_obs_patch_collection'):
+                            self.ridge_obs_patch_collection.set_paths(self.ridge_obs_patches)
                     else:
                         # Count changed, recreate
                         if hasattr(self, 'ridge_obs_patch_collection'):
@@ -613,6 +641,14 @@ class Plot:
             self.map_ax.draw_artist(artist)
         self.map_fig.canvas.flush_events()
         self.save(save_fig_dir, suffix)
+        
+        # Grab frame for animation if map writer exists
+        if hasattr(self, 'map_moviewriter') and self.map_moviewriter is not None:
+            # Draw the full figure before grabbing frame
+            self.map_fig.canvas.draw()
+            self.map_moviewriter.grab_frame()
+        else:
+            plt.pause(0.001)  # small pause for live display
 
     def animate_sim(self, save_fig_dir=None, suffix=0):
         cv = self.sim_fig.canvas
@@ -662,6 +698,9 @@ class Plot:
     def close(self):
         if self.sim and self.save_animation:
             self.moviewriter.finish()
+        
+        if self.map and hasattr(self, 'map_moviewriter') and self.map_moviewriter is not None:
+            self.map_moviewriter.finish()
 
         if self.sim:
             plt.close(self.sim_fig)

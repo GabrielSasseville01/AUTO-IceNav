@@ -223,7 +223,54 @@ class CostMap:
             import cv2
             interpolation = cv2.INTER_AREA if (self.ridge_costmap.shape[0] > target_shape[0] or 
                                                self.ridge_costmap.shape[1] > target_shape[1]) else cv2.INTER_LINEAR
-            self.ridge_costmap_resized = cv2.resize(self.ridge_costmap, (target_shape[1], target_shape[0]), interpolation=interpolation)
+            ridge_resized = cv2.resize(self.ridge_costmap, (target_shape[1], target_shape[0]), interpolation=interpolation)
+            self.ridge_costmap_resized = ridge_resized
+    
+    def _update_ridge_costmap_from_obstacles(self, obs_vertices: List[Any]) -> None:
+        """Update ridge costmap based on current obstacle positions.
+        
+        Maps ridge density to the current obstacle vertices, allowing the ridge
+        costmap to update dynamically as obstacles move during simulation.
+        """
+        if self.ridge_costmap is None:
+            self.ridge_costmap_resized = None
+            return
+        
+        target_shape = self.cost_map.shape
+        self.ridge_costmap_resized = np.zeros(target_shape, dtype=self.ridge_costmap.dtype)
+        
+        from skimage import draw
+        
+        # Map ridge density to each current obstacle
+        for ob_vert in obs_vertices:
+            # Obstacle vertices are already in world coordinates (may have padding shift)
+            # Convert to grid coordinates
+            ob_vert = np.asarray(ob_vert)
+            grid_vertices = ob_vert * self.scale
+            
+            # Get all grid cells inside this polygon
+            # draw.polygon expects (rows, cols) = (y, x), and shape is (height, width)
+            rr, cc = draw.polygon(grid_vertices[:, 1], grid_vertices[:, 0], shape=target_shape)
+            
+            # For each grid cell in the polygon, get the corresponding ridge density
+            for r, c in zip(rr, cc):
+                # Convert costmap grid (c, r) back to world coordinates
+                world_x = c / self.scale
+                world_y = r / self.scale
+                
+                # Skip if below original coordinate range
+                if world_y < 0:
+                    continue
+                
+                # Convert world coordinates to ridge costmap pixel coordinates
+                # Ridge costmap has scale self.ridge_costmap_scale and represents world coords (0-600m)
+                ridge_x = int(world_x / self.ridge_costmap_scale)
+                ridge_y = int(world_y / self.ridge_costmap_scale)
+                
+                # Check bounds and assign ridge density
+                if 0 <= ridge_y < self.ridge_costmap.shape[0] and 0 <= ridge_x < self.ridge_costmap.shape[1]:
+                    if 0 <= r < target_shape[0] and 0 <= c < target_shape[1]:
+                        self.ridge_costmap_resized[r, c] = self.ridge_costmap[ridge_y, ridge_x]
     
     def _apply_ridge_costmap(self) -> None:
         """Apply ridge costmap to the cost map."""
@@ -355,8 +402,11 @@ class CostMap:
                 sic ** self.ice_resistance_weight
             )
 
-        # apply ridge cost if available
-        if self.ridge_costmap_resized is not None:
+        # apply ridge cost if available - update based on current obstacles
+        if self.ridge_costmap is not None:
+            # Update ridge costmap based on current obstacle positions
+            self._update_ridge_costmap_from_obstacles(obs_vertices)
+            # Apply the updated ridge costmap to the cost map
             self._apply_ridge_costmap()
 
         # apply a cost to the boundaries of the channel
