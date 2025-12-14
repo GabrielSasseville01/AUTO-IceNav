@@ -108,7 +108,7 @@ Ensure your simulation config file has the following:
 Our dynamics model for simulation builds upon the following works:
 - [AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields, de Schaetzen et al. 2024](https://arxiv.org/abs/2411.17155)
 - [NASA ECCO4, Physical Oceanography Distributed Archive Center](https://podaac.jpl.nasa.gov/announcements/2021-04-27-ECCO-Version-4-Datasets-Release)
-- [Granular Approach for Continuum Modeling of Sea Ice, St-Denis et al. 2025](https://ams.confex.com/ams/2025Summit/meetingapp.cgi/Paper/459731)
+- [SubZero: A Sea Ice Model With an Explicit Representation of the Floe Life Cycle, Manucharyan et al. 2022]([https://ams.confex.com/ams/2025Summit/meetingapp.cgi/Paper/459731](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2022MS003247))
 - [On generalized residual network for deep learning of unknown dynamical systems, Chen et al. 2021](https://www.sciencedirect.com/science/article/abs/pii/S0021999121002576)
 
 We extend the `AUTO-IceNav` simulator with: 
