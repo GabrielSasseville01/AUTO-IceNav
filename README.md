@@ -74,11 +74,41 @@ Remember to update your configuration file to point to the generated ice flow ma
   ...
 ```
 
+With the same satellite image, it is also possible to generate a ridge density map using the method from [Ice ridge density signatures in high-resolution SAR images, Lensu et al. 2022](https://tc.copernicus.org/articles/16/4363/2022/). This is an important phenomenon to account for during optimization. The process is similar:
+
+Download the high-resolution satellite image as a .tif file:
+```
+  gdown 1jV6xLCtFoe4qCWu_pOy-OnXI583lJ3Q3 --output data/
+```
+
+Then generate the ridge density map:
+```
+  python ship_ice_planner/image_process/generate_ridge_costmap.py \
+  --input data/MEDEA_fram_20100629.png \
+  --satellite data/MEDEA_fram_20100629_satellite.tif \
+  --output data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl \
+  --crop_size 600 \
+  --costmap_scale 0.5 \
+  --method combined \
+  --window_size 25 \
+  --visualize
+```
+
+Ensure your simulation config file has the following:
+```
+  ...
+  costmap:
+  ridge_costmap_file: "data/ridge_costmap_MEDEA_fram_20100629_scale05_fixed.pkl"
+  ridge_cost_weight: 2.0
+  polygon_file: "data/ice_floes_MEDEA_fram_20100629.pkl"
+  ...
+```
+
 ### Modeling ocean dynamics
 Our dynamics model for simulation builds upon the following works:
 - [AUTO-IceNav: A Local Navigation Strategy for Autonomous Surface Ships in Broken Ice Fields, de Schaetzen et al. 2024](https://arxiv.org/abs/2411.17155)
 - [NASA ECCO4, Physical Oceanography Distributed Archive Center](https://podaac.jpl.nasa.gov/announcements/2021-04-27-ECCO-Version-4-Datasets-Release)
-- [Granular Approach for Continuum Modeling of Sea Ice, St-Denis et al. 2025](https://ams.confex.com/ams/2025Summit/meetingapp.cgi/Paper/459731)
+- [SubZero: A Sea Ice Model With an Explicit Representation of the Floe Life Cycle, Manucharyan et al. 2022]([https://ams.confex.com/ams/2025Summit/meetingapp.cgi/Paper/459731](https://agupubs.onlinelibrary.wiley.com/doi/full/10.1029/2022MS003247))
 - [On generalized residual network for deep learning of unknown dynamical systems, Chen et al. 2021](https://www.sciencedirect.com/science/article/abs/pii/S0021999121002576)
 
 We extend the `AUTO-IceNav` simulator with: 
