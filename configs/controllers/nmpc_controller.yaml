@@ -6,7 +6,7 @@
 # planning with model-based diffusion optimization for smoother trajectories.
 
 ### GLOBAL PARAMS
-analysis_save_path: "trajectories/nmpc"
+analysis_save_path: "test_trajectories/nmpc"
 output_dir: null            # root directory for storing all experiment output files
 map_shape:
   - 600                    # length of ice channel in metres
@@ -31,7 +31,7 @@ neural_mpc:
   nmpc_model_weights: 'data/nmpc_baseline.pth'
   
   # Planning horizon (number of points in predicted path)
-  horizon: 200
+  horizon: 64
   
   # Gradient-based optimization settings
   use_gradient_optimization: true      # Enable gradient optimization with costmap

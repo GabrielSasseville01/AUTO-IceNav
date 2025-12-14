@@ -68,6 +68,9 @@ ICE_SMALL_DISTURBANCE = 0.01  # should be some small number, this multiplies the
 LARGE_SPEED_THRESHOLD = 10.  # m/s
 MAX_COLLISION_FORCE_VECTOR_ON_SHIP = [1.5e6, 1.5e6, 1e8]  # ref8 -- N, N, Nm
 DRAG_MASS_EXPONENT = 3.0
+LARGE_FLOE_QUANTILE = 0.9  # treat roughly the largest 10% of floes as quasi-static
+LARGE_FLOE_DRIFT_DECAY = 12.0  # aggressiveness of exponential decay for large floe motion
+LARGE_FLOE_MAX_SPEED = 0.05  # m/s cap ~ only a couple of rendered pixels per second
 
 
 def init_pymunk_space():
@@ -347,6 +350,22 @@ def batched_apply_drag_from_water(sqrt_areas, masses, velocities, angular_veloci
         * speeds[:, None]
         * -velocities
     ) / masses[:, None]
+    if len(sqrt_areas):
+        size_threshold = np.quantile(sqrt_areas, LARGE_FLOE_QUANTILE)
+        large_mask = sqrt_areas >= size_threshold
+        if np.any(large_mask):
+            # Strongly damp drift for the largest floes so they barely move even after impact
+            large_velocities = new_velocities[large_mask]
+            decay = math.exp(-LARGE_FLOE_DRIFT_DECAY * dt)
+            large_velocities *= decay
+            large_speeds = np.linalg.norm(large_velocities, axis=1)
+            if np.any(large_speeds > LARGE_FLOE_MAX_SPEED):
+                scale = np.minimum(
+                    1.0,
+                    LARGE_FLOE_MAX_SPEED / (large_speeds + 1e-12)
+                )
+                large_velocities = large_velocities * scale[:, None]
+            new_velocities[large_mask] = large_velocities
     new_angular_velocities = angular_velocities * (1 - ANGULAR_VELOCITY_DECAY)
     
     # new_velocities = velocities
