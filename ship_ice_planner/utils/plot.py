@@ -992,6 +992,63 @@ class Plot:
         }
         return self._static_background_paths
 
+    def save_actual_path_lines(
+            self,
+            save_fig_dir: str = None,
+            filename: str = 'end_path_lines.pkl'
+    ):
+        """
+        Persist the ship's actual (blue) trajectory as a pickled Matplotlib figure.
+        Uses whichever ship path artists are available (map or sim) and skips missing ones.
+        """
+
+        has_costmap_path = hasattr(self, 'ship_state_line') and self.ship_state_line is not None \
+            and len(self.ship_state_line.get_xdata()) > 0
+        has_render_path = hasattr(self, 'render_ship_state_line') and self.render_ship_state_line is not None \
+            and len(self.render_ship_state_line.get_xdata()) > 0
+
+        if not (has_costmap_path or has_render_path):
+            return None
+
+        target_dir = save_fig_dir or self.save_fig_dir or '.'
+        if not os.path.isdir(target_dir):
+            os.makedirs(target_dir)
+
+        if not filename.lower().endswith('.pkl'):
+            filename += '.pkl'
+
+        panel_configs = []
+        if has_costmap_path:
+            panel_configs.append(('Actual path (costmap view)', self.ship_state_line))
+        if has_render_path:
+            panel_configs.append(('Actual path (render view)', self.render_ship_state_line))
+
+        fig, axes = plt.subplots(1, len(panel_configs), figsize=(5 * len(panel_configs), 4))
+        if len(panel_configs) == 1:
+            axes = [axes]
+
+        for ax, (title, line) in zip(axes, panel_configs):
+            ax.plot(
+                line.get_xdata(),
+                line.get_ydata(),
+                color=SHIP_ACTUAL_PATH_COLOR,
+                label='Actual path'
+            )
+            ax.set_aspect('equal')
+            ax.legend()
+            ax.set_title(title)
+
+        fig.tight_layout()
+        fig.suptitle('Actual Ship Path Lines')
+        fig.subplots_adjust(top=0.85)
+
+        file_path = os.path.join(target_dir, filename)
+        with open(file_path, 'wb') as fh:
+            pickle.dump(fig, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        plt.close(fig)
+
+        return file_path
+
     def create_node_plot(self, nodes_expanded: dict):
         c, data = self.aggregate_nodes(nodes_expanded)
         if self.node_scat is None:

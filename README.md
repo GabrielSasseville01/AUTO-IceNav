@@ -203,10 +203,6 @@ If you use this code or find our work helpful, please cite our paper:
 }
 ```
 
-## Acknowledgements
-
-TBD.
-
 ## Contact
 
 Feel free to open a git issue if you come across any issues or have any questions.

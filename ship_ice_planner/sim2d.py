@@ -933,6 +933,9 @@ def sim(
     finally:
         print('\nDone simulation... Processing simulation data...')
 
+        analysis_save_dir = getattr(cfg, 'analysis_save_path', None)
+        end_path_lines_path = None
+
         conn_recv.close()
         try:
             queue.get_nowait()
@@ -954,7 +957,7 @@ def sim(
             final_sea_currents = sim_dynamics.vessel_model.sea_x[0].detach().numpy()
 
         plot = Plot(
-            trajectory_savepath=cfg.analysis_save_path,
+            trajectory_savepath=analysis_save_dir,
             obstacles=get_global_obs_coords(poly_vertices, batched_data[:, :2], batched_data[:, 2]),
             path=path.T, goal=goal[1], map_figsize=None, remove_sim_ticks=False, show=False,
             ship_pos=sim_data[['x', 'y']].to_numpy().T, map_shape=cfg.map_shape, legend=False,
@@ -962,6 +965,15 @@ def sim(
         )
         plot.add_ship_patch(plot.sim_ax, cfg.ship.vertices, *state.eta)
         plot.save(save_fig_dir, TRIAL_SIM_PLOT)
+
+        path_line_target_dir = analysis_save_dir or save_fig_dir or cfg.output_dir
+        try:
+            end_path_lines_path = plot.save_actual_path_lines(
+                save_fig_dir=path_line_target_dir,
+                filename='end_path_lines.pkl'
+            )
+        except Exception as exc:
+            print(f'Unable to save actual path lines: {exc}')
 
         # plots
         collided_ob_idx = sim_data['collided_ob_idx']
@@ -1018,15 +1030,12 @@ def sim(
             planner.join(timeout=2)
 
         # Exporting to JSON all necessary stats for logging
-        if "output_trajectory_file" in cfg:
-            summary_path = os.path.join(cfg.analysis_save_path, "simulation_stats.json")
+        if analysis_save_dir:
+            os.makedirs(analysis_save_dir, exist_ok=True)
+            summary_path = os.path.join(analysis_save_dir, "simulation_stats.json")
             print(f"Logging trajctory file to {summary_path}")
             simulation_time = time.time()
-            
-            # Get the actual ship trajectory from simulation data (not the planned path)
-            # sim_data contains x, y, psi columns for the actual ship positions
-            actual_trajectory = sim_data[['x', 'y', 'psi']].to_numpy().T.tolist()
-            
+
             simulation_logfile = {
                 "time": simulation_time,
                 "config": cfg.__dict__,
@@ -1034,7 +1043,7 @@ def sim(
                     "ridge_resistance_history": ridge_resistance_history,
                     "ridge_history": ridge_history,
                     "ridge_thickness_history": ridge_thickness_history,
-                    "controller_path": actual_trajectory,  # Actual ship trajectory, not planned path
+                    "end_path_lines": end_path_lines_path,
                     "costmap": planner_costmap.tolist() if planner_costmap is not None else None,
                 },
             }
