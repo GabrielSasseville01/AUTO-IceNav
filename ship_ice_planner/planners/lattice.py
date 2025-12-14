@@ -245,8 +245,10 @@ def lattice_planner(cfg, debug=False, **kwargs):
 
             # send path, return path in real world coordinates
             # shape will be n x 3
+            planner_metrics = {'a_star_cost': float(g_score)} if g_score is not None else None
             md.send_message(resample_path(path_real_world_scale, cfg.path_step_size),
-                            costmap=costmap.cost_map)
+                            costmap=costmap.cost_map,
+                            metrics=planner_metrics)
 
             t1 = time.time()  # second timer to check how long logging and plotting take
 

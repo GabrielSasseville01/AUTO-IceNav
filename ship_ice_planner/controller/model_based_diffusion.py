@@ -62,6 +62,10 @@ class ModelBasedDiffusionController(NrcSupply):
         # Execution tracking
         self.execution_count = 0
         self.replan_interval = 10  # Replan every 10 steps (less frequent for speed)
+
+        # Reward history for logging
+        self.plan_reward_history: List[float] = []
+        self.latest_plan_reward: Optional[float] = None
         
         # Override limits for full scale simulation (approximate)
         self.input_lims = [5.0, 1.0, 10.0]  # [m/s, m/s, deg/s]
@@ -420,11 +424,18 @@ class ModelBasedDiffusionController(NrcSupply):
         # Reverse diffusion process
         # For speed, skip progress bar in control loop
         Ybars = []
+        plan_step_rewards: List[float] = []
         for i in range(self.num_diffusion_steps - 1, 0, -1):
             Ybar_i, rew = self.reverse_diffusion_step(
                 i, Ybar_i, pose, nu, local_path, dt, costmap, goal_y=goal_y
             )
+            plan_step_rewards.append(float(rew))
             Ybars.append(Ybar_i)
+
+        if plan_step_rewards:
+            plan_reward = float(plan_step_rewards[-1])
+            self.plan_reward_history.append(plan_reward)
+            self.latest_plan_reward = plan_reward
         
         # Update mean control sequence
         self.u_seq_mean = Ybars[-1] if len(Ybars) > 0 else Ybar_i

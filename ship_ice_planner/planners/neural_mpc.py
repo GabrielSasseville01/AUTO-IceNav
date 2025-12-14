@@ -36,32 +36,39 @@ def smooth_path(path, smoothing_window=5):
     :param smoothing_window: window size for smoothing (must be odd)
     :return: smoothed path (N, 3)
     """
-    if len(path) < smoothing_window:
+    if smoothing_window is None or smoothing_window < 2:
         return path
     
-    # Ensure window is odd
+    # Ensure window is odd and at least 3
+    smoothing_window = max(3, smoothing_window)
     if smoothing_window % 2 == 0:
         smoothing_window += 1
+    
+    if len(path) <= smoothing_window:
+        smoothing_window = len(path) if len(path) % 2 == 1 else len(path) - 1
+        if smoothing_window < 3:
+            return path
     
     half_window = smoothing_window // 2
     smoothed_path = path.copy()
     
-    # Smooth x and y positions
-    for i in range(len(path)):
-        start_idx = max(0, i - half_window)
-        end_idx = min(len(path), i + half_window + 1)
-        smoothed_path[i, 0] = np.mean(path[start_idx:end_idx, 0])
-        smoothed_path[i, 1] = np.mean(path[start_idx:end_idx, 1])
+    # Preserve the first/last half_window points to avoid introducing jumps at replans
+    start_anchor = path[:half_window].copy()
+    end_anchor = path[-half_window:].copy() if half_window > 0 else np.empty((0, path.shape[1]))
     
-    # Smooth heading (psi) with angle wrapping
-    for i in range(len(path)):
-        start_idx = max(0, i - half_window)
-        end_idx = min(len(path), i + half_window + 1)
-        angles = path[start_idx:end_idx, 2]
-        # Compute circular mean
-        sin_sum = np.sum(np.sin(angles))
-        cos_sum = np.sum(np.cos(angles))
-        smoothed_path[i, 2] = np.arctan2(sin_sum, cos_sum)
+    # Smooth interior points only
+    for i in range(half_window, len(path) - half_window):
+        window = path[i - half_window:i + half_window + 1]
+        smoothed_path[i, 0] = np.mean(window[:, 0])
+        smoothed_path[i, 1] = np.mean(window[:, 1])
+        
+        if path.shape[1] == 3:
+            angles = window[:, 2]
+            smoothed_path[i, 2] = np.arctan2(np.mean(np.sin(angles)), np.mean(np.cos(angles)))
+    
+    if half_window > 0:
+        smoothed_path[:half_window] = start_anchor
+        smoothed_path[-half_window:] = end_anchor
     
     return smoothed_path
 
@@ -583,12 +590,23 @@ def neural_mpc_planner(cfg, debug=False, **kwargs):
             logger.info('Average planner rate: {} Hz\n'.format(1 / np.mean(compute_time)))
             
             # Ensure path is smooth and continuous before sending
-            # First, smooth the path to remove any discontinuities
-            path_real_world_scale = smooth_path(path_real_world_scale)
+            # First, smooth the path to remove any discontinuities (with configurable window)
+            smoothing_window = int(nmpc_cfg.get('path_smoothing_window', 5)) if nmpc_cfg else 5
+            if smoothing_window and smoothing_window > 1:
+                path_real_world_scale = smooth_path(path_real_world_scale, smoothing_window=smoothing_window)
             
             # Then resample to desired density
+            planner_metrics = {}
+            if g_score is not None:
+                planner_metrics['a_star_cost'] = float(g_score)
+            if getattr(neural_mpc, 'last_objective_value', None) is not None:
+                planner_metrics['nmpc_objective'] = float(neural_mpc.last_objective_value)
+            if not planner_metrics:
+                planner_metrics = None
+
             md.send_message(resample_path(path_real_world_scale, cfg.path_step_size),
-                            costmap=costmap.cost_map)
+                            costmap=costmap.cost_map,
+                            metrics=planner_metrics)
             
             # Log metrics
             metrics.put_scalars(

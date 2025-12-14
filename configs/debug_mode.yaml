@@ -6,7 +6,7 @@
 # planning with model-based diffusion optimization for smoother trajectories.
 
 ### GLOBAL PARAMS
-output_trajectory_file: "debug_trajectory.json"
+analysis_save_path: "trajectories/debug"
 output_dir: null            # root directory for storing all experiment output files
 comments: 'Diffusion planner experiment'
 map_shape:

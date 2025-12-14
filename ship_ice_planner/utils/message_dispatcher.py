@@ -159,13 +159,14 @@ class MessageDispatcher:
                 self.shutdown = True
                 self.queue.close()
 
-    def send_message(self, path: np.ndarray, costmap: np.ndarray = None):
+    def send_message(self, path: np.ndarray, costmap: np.ndarray = None, metrics: dict = None):
         """
-        Sends path and optionally costmap data to controller/sim
+        Sends path and optionally costmap/objective data to controller/sim
         
         Args:
             path: Array of waypoints [(x1, y1, psi_1),...,(xn, yn, psi_n)]
             costmap: Optional 2D numpy array with costmap data for visualization/logging
+            metrics: Optional dict with planner objective metrics to log downstream
         """
         if self.pipe:
             if len(path) == 0:
@@ -180,6 +181,8 @@ class MessageDispatcher:
             if costmap is not None:
                 message['costmap'] = costmap
                 self.logger.info('Including costmap of shape {} in message'.format(costmap.shape))
+            if metrics:
+                message['metrics'] = metrics
             
             try:
                 self.pipe.send(message)  # blocking call

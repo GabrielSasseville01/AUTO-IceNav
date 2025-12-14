@@ -50,6 +50,9 @@ neural_mpc:
   discrete_densify_step_size: 5.0      # Step size (meters) for densifying discrete A* plan
   min_discrete_points: 20              # Minimum points after densification
   max_discrete_points: 100             # Maximum points after densification
+  
+  # Path smoothing parameters (helps avoid sudden sway commands on replans)
+  path_smoothing_window: 3             # Odd window size; smaller = less smoothing
 
 
 # A* parameters (used for initial discrete path)

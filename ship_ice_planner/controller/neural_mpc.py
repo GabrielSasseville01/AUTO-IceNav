@@ -219,6 +219,10 @@ class NeuralMPCController:
         self.use_gradient_optimization = use_gradient_optimization
         self.optimization_steps = optimization_steps
         self.learning_rate = learning_rate
+
+        # Objective tracking
+        self.objective_history: List[float] = []
+        self.last_objective_value: Optional[float] = None
         
         # Load model
         print(f"Loading Neural MPC model from {model_path}...")
@@ -358,6 +362,7 @@ class NeuralMPCController:
             optimized_path: (M, 3) optimized continuous path
         """
         if not self.use_gradient_optimization:
+            self.last_objective_value = None
             return self.predict_path(discrete_plan, start_pose, start_nu, goal)
         
         # Get initial prediction (spline path)
@@ -402,6 +407,7 @@ class NeuralMPCController:
         scale = costmap.scale
         
         # Gradient optimization loop
+        last_loss_value: Optional[float] = None
         for step in range(self.optimization_steps):
             optimizer.zero_grad()
             
@@ -479,12 +485,19 @@ class NeuralMPCController:
             
             # Update
             optimizer.step()
+            last_loss_value = float(total_loss.detach().cpu().item())
             
             # Project back to valid range if needed
             with torch.no_grad():
                 # Keep path reasonable
                 path_tensor.clamp_(-1000, 1000)
         
+        if last_loss_value is not None:
+            self.last_objective_value = last_loss_value
+            self.objective_history.append(last_loss_value)
+        else:
+            self.last_objective_value = None
+
         # Get optimized path
         optimized_path_normalized = path_tensor[0].detach().cpu().numpy()
         optimized_path = optimized_path_normalized.copy()

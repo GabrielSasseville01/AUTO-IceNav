@@ -14,8 +14,19 @@ from matplotlib import pyplot as plt
 from pymunk import Vec2d
 import pymunk.batch
 
-from ship_ice_planner.evaluation.evaluate_run_sim import floe_mass_hist_plot, ke_impulse_vs_time_plot, \
-    control_vs_time_plot, state_vs_time_plot, impact_locs_impulse_plot, fracturing_stats_plot, ridging_stats_plot
+from ship_ice_planner.evaluation.evaluate_run_sim import (
+    floe_mass_hist_plot,
+    ke_impulse_vs_time_plot,
+    control_vs_time_plot,
+    state_vs_time_plot,
+    impact_locs_impulse_plot,
+    fracturing_stats_plot,
+    ridging_stats_plot,
+    get_ship_ke_loss,
+    get_system_ke_loss,
+    get_delta_ke_ice,
+    get_total_impulse,
+)
 from ship_ice_planner.launch import launch
 from ship_ice_planner.controller.sim_dynamics import SimShipDynamics
 from ship_ice_planner.geometry.polygon import poly_area
@@ -261,6 +272,30 @@ def sim(
         path = np.asarray(msg)
         planner_costmap = None
 
+    planner_objective_history = {
+        'a_star_costs': [],
+        'nmpc_objectives': []
+    }
+
+    def record_planner_metrics(payload):
+        if not payload:
+            return
+        a_star_cost = payload.get('a_star_cost')
+        if a_star_cost is not None:
+            try:
+                planner_objective_history['a_star_costs'].append(float(a_star_cost))
+            except (TypeError, ValueError):
+                pass
+        nmpc_obj = payload.get('nmpc_objective')
+        if nmpc_obj is not None:
+            try:
+                planner_objective_history['nmpc_objectives'].append(float(nmpc_obj))
+            except (TypeError, ValueError):
+                pass
+
+    if isinstance(msg, dict):
+        record_planner_metrics(msg.get('metrics'))
+
     # setup trajectory tracking
     sim_dynamics.init_trajectory_tracking(path)
 
@@ -421,6 +456,7 @@ def sim(
                         msg_path = msg.get('path', [])
                         if msg.get('costmap') is not None:
                             planner_costmap = msg['costmap']
+                        record_planner_metrics(msg.get('metrics'))
                     else:
                         msg_path = msg
                     # confirm we have path
@@ -1036,6 +1072,18 @@ def sim(
             print(f"Logging trajctory file to {summary_path}")
             simulation_time = time.time()
 
+            time_history = sim_data['time'].tolist()
+            ke_change_series = {
+                "time": time_history,
+                "ship_delta_ke": get_ship_ke_loss(sim_data).tolist(),
+                "system_delta_ke": get_system_ke_loss(sim_data).tolist(),
+                "ice_delta_ke": get_delta_ke_ice(sim_data).tolist(),
+            }
+            impulse_series = {
+                "time": time_history,
+                "max_per_timestep": get_total_impulse(sim_data, aggregate='max').tolist(),
+            }
+
             simulation_logfile = {
                 "time": simulation_time,
                 "config": cfg.__dict__,
@@ -1045,8 +1093,44 @@ def sim(
                     "ridge_thickness_history": ridge_thickness_history,
                     "end_path_lines": end_path_lines_path,
                     "costmap": planner_costmap.tolist() if planner_costmap is not None else None,
+                    "collision_ke_history": ke_change_series,
+                    "impulse_history": impulse_series,
                 },
             }
+
+            objective_summary = {}
+            diffusion_rewards = getattr(sim_dynamics.vessel_model, 'plan_reward_history', None)
+            if diffusion_rewards:
+                reward_samples = [float(r) for r in diffusion_rewards]
+                if reward_samples:
+                    objective_summary['diffusion_rewards'] = {
+                        "per_call": reward_samples,
+                        "total": float(np.sum(reward_samples)),
+                        "mean": float(np.mean(reward_samples)),
+                        "count": len(reward_samples)
+                    }
+
+            if planner_objective_history['a_star_costs']:
+                cost_samples = [float(v) for v in planner_objective_history['a_star_costs']]
+                objective_summary['a_star_costs'] = {
+                    "per_plan": cost_samples,
+                    "total": float(np.sum(cost_samples)),
+                    "mean": float(np.mean(cost_samples)),
+                    "count": len(cost_samples)
+                }
+
+            if planner_objective_history['nmpc_objectives']:
+                nmpc_samples = [float(v) for v in planner_objective_history['nmpc_objectives']]
+                objective_summary['nmpc_objectives'] = {
+                    "per_plan": nmpc_samples,
+                    "total": float(np.sum(nmpc_samples)),
+                    "mean": float(np.mean(nmpc_samples)),
+                    "count": len(nmpc_samples)
+                }
+
+            if objective_summary:
+                simulation_logfile["objective_metrics"] = objective_summary
+
             with open(summary_path, "w") as f:
                 json.dump(simulation_logfile, f)
                 f.close()
