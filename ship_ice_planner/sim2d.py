@@ -14,6 +14,15 @@ from matplotlib import pyplot as plt
 from pymunk import Vec2d
 import pymunk.batch
 
+# Physics backend selection - set via config: physics.backend = 'chrono' or 'pymunk'
+# Chrono backend provides bonded DEM for realistic ice fracturing
+CHRONO_AVAILABLE = False
+try:
+    from ship_ice_planner.physics import ChronoSimAdapter, PymunkBackend
+    CHRONO_AVAILABLE = True
+except ImportError:
+    pass
+
 from ship_ice_planner.evaluation.evaluate_run_sim import (
     floe_mass_hist_plot,
     ke_impulse_vs_time_plot,
@@ -124,8 +133,26 @@ def sim(
     )
     state = sim_dynamics.state
 
-    # setup pymunk environment
-    space = init_pymunk_space()
+    # ==================== Physics Backend Selection ====================
+    # Select physics backend based on config
+    # Options: 'pymunk' (default, fast 2D), 'chrono' (3D with bonded DEM fracturing)
+    physics_backend = cfg.get('physics', {}).get('backend', 'pymunk')
+    use_chrono_backend = (physics_backend == 'chrono') and CHRONO_AVAILABLE
+    
+    if use_chrono_backend:
+        print(f"[sim2d] Using Chrono physics backend with bonded DEM")
+        # Chrono backend handles physics internally
+        # Note: Full Chrono integration requires additional refactoring
+        # For now, this flag enables Chrono-specific code paths where implemented
+        chrono_adapter = ChronoSimAdapter(cfg)
+        space = None  # Chrono replaces Pymunk space
+    else:
+        if physics_backend == 'chrono' and not CHRONO_AVAILABLE:
+            print(f"[sim2d] Warning: Chrono backend requested but not available, using Pymunk")
+        print(f"[sim2d] Using Pymunk physics backend")
+        chrono_adapter = None
+        # setup pymunk environment
+        space = init_pymunk_space()
 
     # setup boundaries of ice field
     # create_channel_borders(space, *cfg.map_shape)  # disabling for now, causes weird behavior

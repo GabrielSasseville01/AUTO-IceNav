@@ -141,4 +141,7 @@ data/*.csv
 *.pth
 *.pkl
 *.mp4
-trajectories/*
+trajectories/*# Generated visualizations (large files)
+visualizations/*.gif
+visualizations/*.png
+!visualizations/rigid_fracture_final.png

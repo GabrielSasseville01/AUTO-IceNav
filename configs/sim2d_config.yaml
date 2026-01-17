@@ -117,3 +117,26 @@ sim_dynamics:
   track_time: 30            # time in seconds to track the current trajectory before triggering a replan
   seamap_path: "data/ecco4_x0.pth"
   seanet_path: "data/seanet.pth"
+
+### PHYSICS BACKEND PARAMS (PyChrono bonded DEM support)
+physics:
+  backend: "pymunk"         # Physics backend: "pymunk" (default) or "chrono" (bonded DEM)
+  use_gpu: false            # Enable GPU acceleration (requires Chrono::GPU module)
+  dt: 0.02                  # Physics time step (should match sim_dynamics.dt)
+
+### ICE MATERIAL PARAMS (for Chrono bonded DEM)
+ice_material:
+  density: 920.0            # Ice density in kg/m³ (sea ice: 900-940)
+  youngs_modulus: 5.0e9     # Young's modulus in Pa (5 GPa typical for sea ice)
+  poisson_ratio: 0.33       # Poisson's ratio
+  tensile_strength: 0.5e6   # Tensile strength in Pa (0.5 MPa) - bond breaking threshold
+  shear_strength: 0.4e6     # Shear strength in Pa (0.4 MPa) - bond breaking threshold
+  compressive_strength: 5.0e6  # Compressive strength in Pa
+  friction: 0.1             # Ice-ice friction coefficient
+  restitution: 0.3          # Coefficient of restitution for collisions
+  thickness: 1.0            # Default ice thickness in meters
+
+### BONDED DEM PARAMS (for Chrono backend)
+bonded_dem:
+  particle_size_ratio: 0.08   # Particle radius as fraction of floe characteristic length
+  min_floe_area_for_bonding: 500.0  # Floes smaller than this (m²) stay rigid, larger ones use bonded DEM
