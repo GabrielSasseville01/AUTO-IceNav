@@ -431,7 +431,7 @@ class CostMap:
         # first plot all the obstacles
         for obs in self.all_obstacles:
             ax.add_patch(
-                patches.Polygon(obs, True, fill=False)
+                patches.Polygon(obs, closed=True, fill=False)
             )
 
         # plot the polygons

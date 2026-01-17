@@ -87,7 +87,7 @@ def impact_locs_plot(sim_data, ship_vertices, save_fig=None):
     ax.plot(*contact_pts.T, 'b.', alpha=0.1)
     ax.set_aspect('equal')
     ax.set_title('Impact locations on ship')
-    ax.add_patch(patches.Polygon(ship_vertices, True, fill=False))
+    ax.add_patch(patches.Polygon(ship_vertices, closed=True, fill=False))
 
     if save_fig:
         f.savefig(save_fig, dpi=300)
@@ -136,7 +136,7 @@ def impact_locs_impulse_plot(sim_data: Union[dict, pd.DataFrame],
             ax = [ax]
 
     for axes in ax:
-        axes.add_patch(patches.Polygon(ship_vertices, True, fill=False, alpha=0.1, lw=2))
+        axes.add_patch(patches.Polygon(ship_vertices, closed=True, fill=False, alpha=0.1, lw=2))
 
     # color map to show the impulse magnitude
     cmap = plt.get_cmap('plasma')

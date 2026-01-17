@@ -176,7 +176,7 @@ def pack_circles_and_ice_field_plot(circs, polys, pose, concentration):
 
     # plot polygons
     for p in polys:
-        patch = patches.Polygon(p['vertices'], True, fill=True, fc='b', ec='k', alpha=0.65)
+        patch = patches.Polygon(p['vertices'], closed=True, fill=True, fc='b', ec='k', alpha=0.65)
         ax[1].add_patch(patch)
     ax[1].set_aspect('equal')
 

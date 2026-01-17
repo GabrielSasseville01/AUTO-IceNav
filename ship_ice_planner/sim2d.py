@@ -176,9 +176,13 @@ def sim(
             # Check if floe should fracture (defer to end of step to avoid modifying during collision)
             # We'll check this after the physics step
 
-    handler = space.add_collision_handler(1, 2)
-    handler.pre_solve = pre_solve_handler
-    handler.post_solve = post_solve_handler
+    # Register collision handlers for ship (type 1) vs ice (type 2) collisions
+    space.on_collision(
+        collision_type_a=1,
+        collision_type_b=2,
+        pre_solve=pre_solve_handler,
+        post_solve=post_solve_handler
+    )
 
     # init pymunk physics objects
     ship_shape = create_sim_ship(space,  # polygon for ship

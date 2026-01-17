@@ -372,7 +372,7 @@ def morph_skeleton(map_shape, state_data, dist_thres=None, debug=False, shrink_f
         f, ax = plt.subplots(1, 4, sharex=True, sharey=True)
         ax[0].imshow(im, cmap='gray', origin='lower')
         for ob in state_data['obstacles']:
-            ax[0].add_patch(patches.Polygon(ob * SCALE, True, fill=False, ec='m'))
+            ax[0].add_patch(patches.Polygon(ob * SCALE, closed=True, fill=False, ec='m'))
         ax[0].set_title('Original image')
         ax[0].set_xlim(0, im.shape[1])
         ax[0].set_ylim(0, im.shape[0])

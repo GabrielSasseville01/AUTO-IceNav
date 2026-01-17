@@ -214,7 +214,7 @@ def generate_body_points_polygon(
         # show the index of each point
         for i, p in enumerate(points):
             plt.text(p[0], p[1], str(i), fontsize=8)
-        ax.add_patch(plt.Polygon(vertices, True, fill=False, linewidth=2))
+        ax.add_patch(plt.Polygon(vertices, closed=True, fill=False, linewidth=2))
         ax.set_aspect('equal')
         plt.show()
 

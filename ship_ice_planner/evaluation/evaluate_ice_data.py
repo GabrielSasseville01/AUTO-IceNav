@@ -436,12 +436,12 @@ def track_ice(trial_dir, plot=False):
             plt.cla()
 
             for p in polys:
-                plt.gca().add_patch(plt.Polygon(p, True, fill=True, color='k', alpha=0.2))
+                plt.gca().add_patch(plt.Polygon(p, closed=True, fill=True, color='k', alpha=0.2))
             ship_footprint = get_ship_footprint_at_pose(ship_pose[-1])
-            plt.gca().add_patch(plt.Polygon(ship_footprint, True, fill=True, color='b', alpha=0.5))
+            plt.gca().add_patch(plt.Polygon(ship_footprint, closed=True, fill=True, color='b', alpha=0.5))
 
             for tracked in tracked_objects:
-                plt.gca().add_patch(plt.Polygon(tracked.polygon[-1], True, fill=True, color='k', alpha=0.5))
+                plt.gca().add_patch(plt.Polygon(tracked.polygon[-1], closed=True, fill=True, color='k', alpha=0.5))
                 plt.plot(tracked.measurements[-1][0], tracked.measurements[-1][1], 'cx', label='measurement')
                 plt.plot(tracked.estimates[-1][0], tracked.estimates[-1][1], 'mx', label='prediction')
                 plt.plot(*np.asarray(tracked.measurements).T[:2], 'b--', label='measurements')
@@ -553,10 +553,10 @@ def evaluate_trial_from_tracking_data(trial_dir,
 
             polys = get_polygons_from_timing_file(trial_dir, step=step)
             for p in polys:
-                ax.add_patch(plt.Polygon(p, True, fill=True, color='k', alpha=0.2))
+                ax.add_patch(plt.Polygon(p, closed=True, fill=True, color='k', alpha=0.2))
 
             ship_footprint = get_ship_footprint_at_pose(data['ship_pose'][idx])
-            ax.add_patch(plt.Polygon(ship_footprint, True, fill=True, color='b', alpha=0.5))
+            ax.add_patch(plt.Polygon(ship_footprint, closed=True, fill=True, color='b', alpha=0.5))
             ax.plot(*data['ship_pose'][idx][:2], 'bx', label='ship pose')
 
             num_tracked = 0
@@ -603,10 +603,10 @@ def evaluate_trial_from_tracking_data(trial_dir,
         idx = -1
         polys = get_polygons_from_timing_file(trial_dir, step=step)
         for p in polys:
-            ax1.add_patch(plt.Polygon(p, True, fill=True, color='k', alpha=0.2))
+            ax1.add_patch(plt.Polygon(p, closed=True, fill=True, color='k', alpha=0.2))
 
         ship_footprint = get_ship_footprint_at_pose(data['ship_pose'][idx])
-        ax1.add_patch(plt.Polygon(ship_footprint, True, fill=True, color='b', alpha=0.5))
+        ax1.add_patch(plt.Polygon(ship_footprint, closed=True, fill=True, color='b', alpha=0.5))
         ax1.plot(*np.asarray(data['ship_pose']).T[:2], 'b-', label='ship pose')
 
         num_tracked = 0

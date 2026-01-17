@@ -12,7 +12,7 @@ comments: 'Diffusion planner experiment'
 map_shape:
   - 600                    # length of ice channel in metres
   - 600                     # width of ice channel in metres
-map_file: "data/MEDEA_fram_20100629.pkl"
+map_file: "data/ice_floes_MEDEA_fram_20100629.pkl"
 plot:
   y_axis_limit: 600         # limit in metres for the y-axis of the plot
   show: false               # true will show planner plots
@@ -113,6 +113,5 @@ sim_dynamics:
   target_speed: 2.0
   max_acceleration: 0.04
   track_time: 30
-
-seamap_path: "ecco4_x0.pth"
-seanet_path: "seanet.pth"
+  seamap_path: "data/ecco4_x0.pth"
+  seanet_path: "data/seanet.pth"

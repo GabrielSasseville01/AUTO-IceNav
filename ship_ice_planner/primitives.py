@@ -144,7 +144,7 @@ class Primitives:
                         R2 = Rxy(theta + idx * self.spacing)
                         # plot ship as polygon
                         rot_vertices = ship_vertices @ R2.T
-                        ax[idx].add_patch(patches.Polygon(rot_vertices, True, fill=False, ec='k', zorder=1, alpha=0.5, linewidth='0.5'))
+                        ax[idx].add_patch(patches.Polygon(rot_vertices, closed=True, fill=False, ec='k', zorder=1, alpha=0.5, linewidth='0.5'))
 
                     ax[idx].set_aspect('equal')
 

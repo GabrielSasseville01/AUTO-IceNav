@@ -7,7 +7,7 @@ comments: ''                # comments about experiment being performed
 map_shape:
   - 600                    # length of ice channel in metres
   - 600                     # width of ice channel in metres
-map_file: "data/MEDEA_fram_20100629.pkl"
+map_file: "data/ice_floes_MEDEA_fram_20100629.pkl"
 plot:
   y_axis_limit: 600         # limit in metres for the y-axis of the plot
   show: true               # true will show planner plots
@@ -115,3 +115,5 @@ sim_dynamics:
   target_speed: 2.0         # m/s
   max_acceleration: 0.04    # m/s^2 -- too high of a value hurts tracking
   track_time: 30            # time in seconds to track the current trajectory before triggering a replan
+  seamap_path: "data/ecco4_x0.pth"
+  seanet_path: "data/seanet.pth"

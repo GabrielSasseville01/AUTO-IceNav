@@ -231,13 +231,13 @@ class Plot:
                 self.create_ridge_costmap_plot(ridge_costmap)
                 self.map_artists.extend([self.ridge_image, self.ridge_ax.yaxis])
                 # Initialize ridge obstacle patches if obstacles are provided
-                if len(obstacles):
-                    self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
-                                             for obs in obstacles]
-                    self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
-                        PatchCollection(self.ridge_obs_patches, match_original=True)
-                    )
-                    self.map_artists.append(self.ridge_obs_patch_collection)
+            if len(obstacles):
+                self.ridge_obs_patches = [patches.Polygon(obs, closed=True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                                         for obs in obstacles]
+                self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
+                    PatchCollection(self.ridge_obs_patches, match_original=True)
+                )
+                self.map_artists.append(self.ridge_obs_patch_collection)
 
             if swath is not None:
                 # init swath image
@@ -251,7 +251,7 @@ class Plot:
 
             # add the patches for the ice
             if len(obstacles):
-                self.obs_patches = [patches.Polygon(obs, True, fill=False, ec='k', linewidth=0.5) for
+                self.obs_patches = [patches.Polygon(obs, closed=True, fill=False, ec='k', linewidth=0.5) for
                                     obs in obstacles]
                 self.obs_patch_collection = self.map_ax.add_collection(
                     PatchCollection(self.obs_patches, match_original=True)
@@ -333,7 +333,7 @@ class Plot:
                     ship_pos = ship_pos[:, 0]
 
                 self.ship_patch = self.map_ax.add_patch(
-                    patches.Polygon(ship_vertices @ Rxy(ship_pos[2]).T + ship_pos[:2], True, fill=False, color='m')
+                    patches.Polygon(ship_vertices @ Rxy(ship_pos[2]).T + ship_pos[:2], closed=True, fill=False, color='m')
                 )
                 self.map_artists.append(self.ship_patch)
 
@@ -405,7 +405,7 @@ class Plot:
             # initialize artist for ship
             if ship_vertices is not None:
                 self.ship_patch = self.sim_ax.add_patch(
-                    patches.Polygon(ship_vertices @ Rxy(ship_pos[2]).T + ship_pos[:2], True, fill=True,
+                    patches.Polygon(ship_vertices @ Rxy(ship_pos[2]).T + ship_pos[:2], closed=True, fill=True,
                                     edgecolor='black', facecolor=SHIP_PATCH_COLOR, linewidth=1, alpha=0.8)
                 )
                 self.add_artist(self.ship_patch)
@@ -640,14 +640,14 @@ class Plot:
                                 self.ridge_obs_patch_collection.remove()
                             except ValueError:
                                 pass
-                        self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                        self.ridge_obs_patches = [patches.Polygon(obs, closed=True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
                                                  for obs in obstacles]
                         self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
                             PatchCollection(self.ridge_obs_patches, match_original=True)
                         )
                 else:
                     # Create new ridge obstacle patches
-                    self.ridge_obs_patches = [patches.Polygon(obs, True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
+                    self.ridge_obs_patches = [patches.Polygon(obs, closed=True, fill=False, ec='cyan', linewidth=0.5, alpha=0.7) 
                                              for obs in obstacles]
                     self.ridge_obs_patch_collection = self.ridge_ax.add_collection(
                         PatchCollection(self.ridge_obs_patches, match_original=True)
@@ -905,7 +905,7 @@ class Plot:
             if self._obstacles_data:
                 for obs in self._obstacles_data:
                     ax.add_patch(
-                        patches.Polygon(obs, True, fill=False, ec='k', linewidth=0.5)
+                        patches.Polygon(obs, closed=True, fill=False, ec='k', linewidth=0.5)
                     )
             ax.set_xlim(self.map_ax.get_xlim())
             ax.set_ylim(self.map_ax.get_ylim())
@@ -1198,7 +1198,7 @@ class Plot:
     def add_ship_patch(ax, vertices, x, y, psi, ec='black', fc=SHIP_PATCH_COLOR):
         R = Rxy(psi)
         ax.add_patch(
-            patches.Polygon(vertices @ R.T + [x, y], True, fill=True, edgecolor=ec, facecolor=fc, alpha=0.5)
+            patches.Polygon(vertices @ R.T + [x, y], closed=True, fill=True, edgecolor=ec, facecolor=fc, alpha=0.5)
         )
 
     @staticmethod

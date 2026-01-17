@@ -329,7 +329,7 @@ class PathOptimizer:
 
             for obs in obstacles:
                 path2_ax.add_patch(
-                    patches.Polygon(obs['vertices'], True, fill=True, lw=1, ec='k', fc='b', alpha=0.3)
+                    patches.Polygon(obs['vertices'], closed=True, fill=True, lw=1, ec='k', fc='b', alpha=0.3)
                 )
             path2_ax.plot(X_list[0][0, :], X_list[0][1, :], 'k--', label='initial')
             path2_ax.legend()

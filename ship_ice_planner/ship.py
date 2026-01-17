@@ -61,7 +61,7 @@ class Ship:
         f, ax = plt.subplots()
         # plot ship as polygon
         rot_vertices = self.vertices @ R.T + start_pos[:2]
-        ax.add_patch(patches.Polygon(rot_vertices, True, fill=True, zorder=10, alpha=0.5))
+        ax.add_patch(patches.Polygon(rot_vertices, closed=True, fill=True, zorder=10, alpha=0.5))
 
         # plot the vertices
         for v in rot_vertices:
