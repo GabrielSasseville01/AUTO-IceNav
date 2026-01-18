@@ -84,7 +84,8 @@ class IceMaterialParams:
         self.k_s = shear_modulus
     
     def get_bond_stiffness(self, particle_radius: float, 
-                            target_failure_strain: float = 0.05) -> tuple[float, float]:
+                            target_failure_strain: float = 0.05,
+                            bond_radius_ratio: float = 0.25) -> tuple[float, float]:
         """
         Calculate bond stiffness for DEM simulation.
         
@@ -98,15 +99,17 @@ class IceMaterialParams:
         Args:
             particle_radius: Radius of bonded particles in meters
             target_failure_strain: Strain at which bond should fail (default 5%)
+            bond_radius_ratio: Ratio of bond radius to particle radius (default 0.25)
             
         Returns:
             Tuple of (normal_stiffness, shear_stiffness) in N/m
         """
-        # Bond area for force calculation
-        bond_area = np.pi * particle_radius ** 2
+        # Bond radius is a fraction of particle radius (matches get_bond_strength)
+        bond_radius = particle_radius * bond_radius_ratio
+        bond_area = np.pi * bond_radius ** 2
         bond_length = 2 * particle_radius
         
-        # Breaking force
+        # Breaking force (must match get_bond_strength)
         sigma_c = self.tensile_strength * bond_area  # Tensile limit (N)
         
         # Target deformation at failure
@@ -120,18 +123,30 @@ class IceMaterialParams:
         
         return k_n_bond, k_s_bond
     
-    def get_bond_strength(self, particle_radius: float) -> tuple[float, float]:
+    def get_bond_strength(self, particle_radius: float, 
+                           bond_radius_ratio: float = 0.25) -> tuple[float, float]:
         """
         Calculate bond breaking forces for a given particle size.
         
+        The bond area is NOT the full particle cross-section. Real inter-particle
+        bonds have a smaller contact/bonding region. Following DEM literature,
+        we use a "bond radius" that is a fraction of the particle radius.
+        
+        From Celigueta et al. (2019) and similar DEM ice papers:
+        - Bond radius is typically 20-30% of particle radius
+        - This gives bond_area = π × (0.25 × r)² = 0.0625 × π × r²
+        - i.e., ~6% of full cross-section
+        
         Args:
             particle_radius: Radius of bonded particles in meters
+            bond_radius_ratio: Ratio of bond radius to particle radius (default 0.25)
             
         Returns:
             Tuple of (tensile_force_limit, shear_force_limit) in N
         """
-        # Bond area for force calculation
-        bond_area = np.pi * particle_radius ** 2
+        # Bond radius is a fraction of particle radius
+        bond_radius = particle_radius * bond_radius_ratio
+        bond_area = np.pi * bond_radius ** 2
         
         tensile_limit = self.tensile_strength * bond_area
         shear_limit = self.shear_strength * bond_area
