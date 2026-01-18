@@ -37,7 +37,8 @@ from ship_ice_planner.utils.sim_utils import *
 from ship_ice_planner.utils.sim_utils import load_real_obstacles, ICE_THICKNESS
 from ship_ice_planner.utils.ice_fracture_ridge import (
     IceFloeState, RidgeZone, FRACTURE_ENABLED, RIDGING_ENABLED,
-    fracture_ice_floe, check_ridging_conditions, create_ridge_zone,
+    fracture_ice_floe, fracture_ice_floe_progressive,
+    check_ridging_conditions, create_ridge_zone,
     compute_ridge_resistance, compute_compression_force,
     RIDGE_MIN_FLOES, RIDGE_ACCUMULATION_RATE,
     RIDGE_DECAY_TIME, RIDGE_MIN_ACTIVITY_DISTANCE,
@@ -658,7 +659,7 @@ def sim(
                         center_pos = ice_shape.body.position
                         ice_state.update_stress_from_interactions(center_pos.x, center_pos.y)
                 
-                # ===== Check for fracturing =====
+                # ===== Check for fracturing (progressive crack model) =====
                 floes_to_fracture = []
                 floes_to_grind = []  # For corner grinding
                 
@@ -678,8 +679,25 @@ def sim(
                             min_area=np.pi * 2.0 ** 2  # Min area for fracturing
                         )
                         
-                        if should_fracture_impulse or should_fracture_stress:
-                            floes_to_fracture.append((ice_shape, ice_state))
+                        # Progressive crack model:
+                        # 1. If stress exceeds yield and no crack exists, initiate crack
+                        # 2. If crack exists, grow it based on stress
+                        # 3. If crack spans floe, trigger full fracture
+                        
+                        if ice_state.has_active_crack():
+                            # Grow existing crack
+                            ready_to_split = ice_state.update_crack(dt=dt_sub)
+                            if ready_to_split or ice_state.should_fracture_progressive():
+                                floes_to_fracture.append((ice_shape, ice_state, True))  # True = use progressive
+                        elif should_fracture_impulse or should_fracture_stress:
+                            # Initiate new crack (don't fracture immediately)
+                            # Get contact point from interactions if available
+                            contact_point = None
+                            if len(ice_state.interactions) > 0:
+                                # Use first contact point
+                                _, contact_pos = ice_state.interactions[0]
+                                contact_point = contact_pos
+                            ice_state.initiate_crack(contact_point)
                         elif len(ice_state.corner_contacts) > 0:
                             # Candidate for corner grinding
                             floes_to_grind.append((ice_shape, ice_state))
@@ -706,16 +724,29 @@ def sim(
                     ice_state.clear_corner_contacts()
                 
                 # ===== Full fracture =====
-                for ice_shape, ice_state in floes_to_fracture:
+                for fracture_item in floes_to_fracture:
+                    # Unpack - may have 2 or 3 elements depending on progressive flag
+                    if len(fracture_item) == 3:
+                        ice_shape, ice_state, use_progressive = fracture_item
+                    else:
+                        ice_shape, ice_state = fracture_item
+                        use_progressive = False
+                    
                     # Record fracture event before fracturing
                     fracture_pos = ice_shape.body.position
                     fracture_impulse = ice_state.cumulative_impulse
                     
-                    # Use Voronoi tessellation (SubZero approach)
-                    new_floes, next_floe_idx = fracture_ice_floe(
-                        space, ice_shape, ice_state, ice_floe_states, next_floe_idx,
-                        use_voronoi=True
-                    )
+                    # Use progressive crack-line split if crack exists, else Voronoi
+                    if use_progressive and ice_state.has_active_crack():
+                        new_floes, next_floe_idx = fracture_ice_floe_progressive(
+                            space, ice_shape, ice_state, ice_floe_states, next_floe_idx
+                        )
+                    else:
+                        # Fallback to Voronoi tessellation
+                        new_floes, next_floe_idx = fracture_ice_floe(
+                            space, ice_shape, ice_state, ice_floe_states, next_floe_idx,
+                            use_voronoi=True
+                        )
                     
                     if new_floes:
                         # Track fracture event

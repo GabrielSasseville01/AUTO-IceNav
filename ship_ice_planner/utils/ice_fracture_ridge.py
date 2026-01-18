@@ -10,8 +10,8 @@ from typing import List, Tuple, Dict
 import numpy as np
 import pymunk
 from pymunk import Vec2d, Poly
-from shapely.geometry import Polygon, Point, LineString, MultiPolygon
-from shapely.ops import unary_union
+from shapely.geometry import Polygon, Point, LineString, MultiPolygon, GeometryCollection
+from shapely.ops import unary_union, split
 from scipy.spatial import Voronoi
 
 from ship_ice_planner.utils.sim_utils import (
@@ -69,6 +69,99 @@ RIDGE_CONSOLIDATION_TIME = 60.0  # seconds - time for ridge to fully consolidate
 RIDGE_COMPRESSION_FORCE_SCALE = 1000.0  # N·s/m - scale factor for compression-based accumulation
 ICE_BULK_DENSITY = 917.0  # kg/m³ - density of consolidated ice (less than pure ice due to air pockets)
 RIDGE_SAIL_HEIGHT_FACTOR = 0.3  # Sail height as fraction of total accumulated ice height
+
+# Progressive crack propagation parameters
+CRACK_GROWTH_RATE = 5.0        # m/s - How fast crack extends per stress unit
+CRACK_CRITICAL_FRACTION = 0.8  # Fraction of floe diameter needed to trigger full split
+CRACK_INITIAL_LENGTH = 2.0     # m - Starting crack size when initiated
+
+
+# ==============================================================================
+# Progressive Crack State (for realistic crack growth)
+# ==============================================================================
+
+class CrackState:
+    """
+    Tracks an active crack propagating through an ice floe.
+    
+    Based on Linear Elastic Fracture Mechanics (LEFM) principles:
+    - Crack initiates perpendicular to maximum principal stress
+    - Crack grows based on stress intensity at the tip
+    - Floe splits when crack spans a critical fraction of the diameter
+    """
+    
+    def __init__(self, origin: np.ndarray, direction: np.ndarray, initial_length: float = CRACK_INITIAL_LENGTH):
+        """
+        Initialize a crack.
+        
+        Args:
+            origin: (x, y) crack origin point (typically near contact)
+            direction: Unit vector for crack propagation direction
+            initial_length: Starting length of the crack (m)
+        """
+        self.origin = np.array(origin, dtype=float)
+        
+        # Normalize direction
+        dir_norm = np.linalg.norm(direction)
+        if dir_norm > 1e-10:
+            self.direction = np.array(direction, dtype=float) / dir_norm
+        else:
+            self.direction = np.array([1.0, 0.0])  # Default to horizontal
+        
+        self.length = initial_length
+        self.age = 0  # Timesteps since initiation
+        self.max_length_reached = initial_length
+    
+    def grow(self, stress_ratio: float, dt: float, growth_rate: float = CRACK_GROWTH_RATE):
+        """
+        Grow crack based on stress intensity.
+        
+        The crack grows faster when stress is higher relative to threshold.
+        
+        Args:
+            stress_ratio: Ratio of current stress to threshold (>1 means over threshold)
+            dt: Timestep duration (seconds)
+            growth_rate: Base growth rate (m/s per unit stress ratio)
+        """
+        if stress_ratio > 1.0:
+            # Crack grows proportionally to how much stress exceeds threshold
+            growth = growth_rate * (stress_ratio - 1.0) * dt
+            self.length += growth
+            self.max_length_reached = max(self.max_length_reached, self.length)
+        
+        self.age += 1
+    
+    def get_endpoints(self) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Return crack line endpoints.
+        
+        Crack extends symmetrically from origin in both directions.
+        
+        Returns:
+            Tuple of (tip1, tip2) as numpy arrays
+        """
+        half = self.length / 2.0
+        tip1 = self.origin + half * self.direction
+        tip2 = self.origin - half * self.direction
+        return tip1, tip2
+    
+    def spans_floe(self, floe_diameter: float, critical_fraction: float = CRACK_CRITICAL_FRACTION) -> bool:
+        """
+        Check if crack is long enough for full fracture.
+        
+        Args:
+            floe_diameter: Effective diameter of the floe (m)
+            critical_fraction: Fraction of diameter needed (0-1)
+        
+        Returns:
+            True if crack should trigger full fracture
+        """
+        return self.length >= critical_fraction * floe_diameter
+    
+    def get_crack_line_for_drawing(self) -> Tuple[Tuple[float, float], Tuple[float, float]]:
+        """Get crack endpoints as tuples for drawing."""
+        tip1, tip2 = self.get_endpoints()
+        return (float(tip1[0]), float(tip1[1])), (float(tip2[0]), float(tip2[1]))
 
 
 # ==============================================================================
@@ -272,6 +365,13 @@ class IceFloeState:
         self.principal_stress_1 = 0.0  # Maximum principal stress
         self.principal_stress_2 = 0.0  # Minimum principal stress
         
+        # Principal stress directions (eigenvectors)
+        self.principal_direction_1 = None  # Direction of max principal stress
+        self.principal_direction_2 = None  # Crack direction (perpendicular to max stress)
+        
+        # Progressive crack tracking
+        self.active_crack = None  # CrackState or None
+        
         # Corner tracking for corner grinding
         self.corner_contacts = []  # Vertices in contact with other floes
     
@@ -344,20 +444,36 @@ class IceFloeState:
     
     def _compute_principal_stresses(self):
         """
-        Compute principal stresses from the stress tensor.
+        Compute principal stresses and directions from the stress tensor.
         
         Principal stresses are eigenvalues of the 2D stress tensor.
+        Principal directions are the corresponding eigenvectors.
+        
         σ1 = max eigenvalue (maximum principal stress)
         σ2 = min eigenvalue (minimum principal stress)
+        
+        Crack direction = eigenvector of σ2 (perpendicular to max stress direction)
         """
         try:
-            eigenvalues = np.linalg.eigvalsh(self.stress_tensor)
-            self.principal_stress_1 = np.max(eigenvalues)
-            self.principal_stress_2 = np.min(eigenvalues)
+            # Use eigh to get both eigenvalues and eigenvectors
+            eigenvalues, eigenvectors = np.linalg.eigh(self.stress_tensor)
+            
+            # Sort by eigenvalue magnitude (descending)
+            idx = np.argsort(eigenvalues)[::-1]
+            
+            self.principal_stress_1 = eigenvalues[idx[0]]  # Max principal stress
+            self.principal_stress_2 = eigenvalues[idx[1]]  # Min principal stress
+            
+            # Eigenvectors are columns of the matrix
+            self.principal_direction_1 = eigenvectors[:, idx[0]]  # Max stress direction
+            self.principal_direction_2 = eigenvectors[:, idx[1]]  # Crack direction (perpendicular)
+            
         except np.linalg.LinAlgError:
             # Fallback if eigenvalue computation fails
             self.principal_stress_1 = 0.0
             self.principal_stress_2 = 0.0
+            self.principal_direction_1 = None
+            self.principal_direction_2 = None
     
     def add_interaction(self, force: Tuple[float, float], contact_pos: Tuple[float, float]):
         """
@@ -486,9 +602,106 @@ class IceFloeState:
             'stress_tensor': self.stress_tensor.copy(),
             'principal_stress_1': self.principal_stress_1,
             'principal_stress_2': self.principal_stress_2,
+            'principal_direction_1': self.principal_direction_1,
+            'principal_direction_2': self.principal_direction_2,
             'stress_count': self.stress_count,
             'cumulative_impulse': self.cumulative_impulse,
+            'active_crack': self.active_crack,
         }
+    
+    # ==========================================================================
+    # Progressive Crack Methods
+    # ==========================================================================
+    
+    def initiate_crack(self, contact_point: Tuple[float, float] = None):
+        """
+        Start a new crack when yield criterion is exceeded.
+        
+        The crack initiates perpendicular to the maximum principal stress direction.
+        
+        Args:
+            contact_point: (x, y) point where crack originates (default: floe center)
+        """
+        if self.active_crack is not None:
+            return  # Already has an active crack
+        
+        # Determine crack origin
+        if contact_point is not None:
+            origin = np.array(contact_point)
+        elif self.center_position is not None:
+            origin = np.array(self.center_position)
+        else:
+            # Fallback - can't initiate without position info
+            return
+        
+        # Determine crack direction (perpendicular to max stress)
+        direction = self.principal_direction_2
+        if direction is None or np.linalg.norm(direction) < 1e-10:
+            # Fallback to random direction if no stress info
+            angle = np.random.uniform(0, np.pi)
+            direction = np.array([np.cos(angle), np.sin(angle)])
+        
+        # Create the crack
+        self.active_crack = CrackState(origin, direction, CRACK_INITIAL_LENGTH)
+    
+    def update_crack(self, dt: float = 0.02) -> bool:
+        """
+        Grow active crack based on current stress state.
+        
+        Args:
+            dt: Timestep duration (seconds)
+        
+        Returns:
+            True if crack has reached critical length and floe should split
+        """
+        if self.active_crack is None:
+            return False
+        
+        # Compute stress ratio (how much stress exceeds threshold)
+        # Use compressive strength as threshold
+        threshold = SIGMA_C * 0.5
+        if threshold > 0:
+            stress_ratio = abs(self.principal_stress_1) / threshold
+        else:
+            stress_ratio = 0.0
+        
+        # Grow the crack
+        self.active_crack.grow(stress_ratio, dt, CRACK_GROWTH_RATE)
+        
+        # Check if crack spans the floe
+        floe_diameter = 2.0 * np.sqrt(self.initial_area / np.pi)
+        return self.active_crack.spans_floe(floe_diameter, CRACK_CRITICAL_FRACTION)
+    
+    def should_fracture_progressive(self) -> bool:
+        """
+        Check if floe should fully fracture (crack has reached critical length).
+        
+        Returns:
+            True if active crack spans floe and full fracture should occur
+        """
+        if self.active_crack is None:
+            return False
+        
+        if self.has_fractured:
+            return False
+        
+        floe_diameter = 2.0 * np.sqrt(self.initial_area / np.pi)
+        return self.active_crack.spans_floe(floe_diameter, CRACK_CRITICAL_FRACTION)
+    
+    def get_crack_line(self) -> Tuple[Tuple[float, float], Tuple[float, float]] | None:
+        """
+        Get the current crack line endpoints for visualization.
+        
+        Returns:
+            Tuple of ((x1, y1), (x2, y2)) or None if no active crack
+        """
+        if self.active_crack is None:
+            return None
+        return self.active_crack.get_crack_line_for_drawing()
+    
+    def has_active_crack(self) -> bool:
+        """Check if floe has an active crack."""
+        return self.active_crack is not None
 
 
 class RidgeZone:
@@ -942,6 +1155,214 @@ def bounded_voronoi_tessellation(
             continue
     
     return voronoi_cells
+
+
+def crack_line_split(
+    boundary_polygon: Polygon,
+    crack: CrackState,
+    min_piece_area: float = 1.0
+) -> List[Polygon]:
+    """
+    Split a polygon along a crack line.
+    
+    This is used for progressive fracturing where a crack has grown
+    to span the floe and the floe should split into two pieces.
+    
+    Args:
+        boundary_polygon: Shapely Polygon to split
+        crack: CrackState with the crack line information
+        min_piece_area: Minimum area for resulting pieces (m²)
+    
+    Returns:
+        List of Shapely Polygons (typically 2 pieces)
+    """
+    if not boundary_polygon.is_valid:
+        boundary_polygon = boundary_polygon.buffer(0)
+        if not boundary_polygon.is_valid:
+            return []
+    
+    # Get crack endpoints
+    tip1, tip2 = crack.get_endpoints()
+    direction = crack.direction
+    
+    # Extend line beyond polygon bounds to ensure clean split
+    # (line must fully cross polygon for split to work)
+    extension = 1000.0  # Large enough to cross any reasonable polygon
+    line_start = tip1 + extension * direction
+    line_end = tip2 - extension * direction
+    
+    crack_line = LineString([line_start, line_end])
+    
+    try:
+        # Split polygon with the crack line
+        result = split(boundary_polygon, crack_line)
+        
+        # Extract valid polygons from result
+        pieces = []
+        if hasattr(result, 'geoms'):
+            for geom in result.geoms:
+                if isinstance(geom, Polygon) and geom.area >= min_piece_area:
+                    pieces.append(geom)
+        elif isinstance(result, Polygon) and result.area >= min_piece_area:
+            pieces.append(result)
+        
+        return pieces
+        
+    except Exception:
+        # If split fails, return empty list (will fall back to other methods)
+        return []
+
+
+def fracture_ice_floe_progressive(
+    space: pymunk.Space,
+    ice_shape: Poly,
+    ice_state: IceFloeState,
+    ice_floe_states: Dict[int, IceFloeState],
+    next_idx: int = None
+) -> Tuple[List[Poly], int]:
+    """
+    Split an ice floe along its active crack line.
+    
+    This is the progressive fracturing version that uses the crack
+    that has grown over time, rather than random Voronoi.
+    
+    Args:
+        space: Pymunk physics space
+        ice_shape: The ice floe shape to fracture
+        ice_state: State tracking for the floe (must have active_crack)
+        ice_floe_states: Dictionary mapping shape.idx to IceFloeState
+        next_idx: Next available index for new floes
+    
+    Returns:
+        Tuple of (list of new ice floe shapes, next available idx)
+    """
+    if not FRACTURE_ENABLED:
+        return [], next_idx if next_idx is not None else 0
+    
+    if ice_state.active_crack is None:
+        # No crack, can't do progressive fracture
+        return [], next_idx if next_idx is not None else 0
+    
+    # Get current state
+    vertices = list_vec2d_to_numpy(ice_shape.get_vertices())
+    center = ice_shape.body.position
+    velocity = ice_shape.body.velocity
+    angular_velocity = ice_shape.body.angular_velocity
+    thickness = ice_state.thickness
+    
+    # Check minimum size
+    area = ice_state.initial_area
+    radius = np.sqrt(area / np.pi)
+    if radius < FRACTURE_MIN_SIZE:
+        space.remove(ice_shape.body, ice_shape)
+        if hasattr(ice_shape, 'idx') and ice_shape.idx in ice_floe_states:
+            del ice_floe_states[ice_shape.idx]
+        return [], next_idx if next_idx is not None else 0
+    
+    # Remove original
+    space.remove(ice_shape.body, ice_shape)
+    if hasattr(ice_shape, 'idx'):
+        if ice_shape.idx in ice_floe_states:
+            del ice_floe_states[ice_shape.idx]
+    
+    # Determine next available index
+    if next_idx is None:
+        if len(ice_floe_states) > 0:
+            next_idx = max(ice_floe_states.keys()) + 1
+        else:
+            next_idx = 0
+    
+    # Create shapely polygon from vertices (in local coords)
+    try:
+        poly = Polygon(vertices)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+            if not poly.is_valid or poly.area < 0.1:
+                return [], next_idx
+    except Exception:
+        return [], next_idx
+    
+    # The crack is in world coordinates, need to convert to local
+    # Actually, we need to work in local coordinates for the polygon
+    crack_local = CrackState(
+        origin=ice_state.active_crack.origin - np.array([center.x, center.y]),
+        direction=ice_state.active_crack.direction,
+        initial_length=ice_state.active_crack.length
+    )
+    crack_local.length = ice_state.active_crack.length
+    
+    # Split along crack line
+    split_polygons = crack_line_split(poly, crack_local)
+    
+    if len(split_polygons) < 2:
+        # Split failed, fallback to Voronoi
+        split_polygons = bounded_voronoi_tessellation(poly, num_seeds=2)
+    
+    if len(split_polygons) < 2:
+        # Still failed, return empty
+        return [], next_idx
+    
+    # Create new floes from split polygons
+    new_floes = []
+    
+    for split_poly in split_polygons:
+        try:
+            if hasattr(split_poly, 'exterior'):
+                coords = np.array(split_poly.exterior.coords[:-1])
+            else:
+                continue
+            
+            if len(coords) < 3:
+                continue
+            
+            # Compute local centroid of split piece (in parent's local frame)
+            local_centroid = split_poly.centroid
+            local_cx, local_cy = local_centroid.x, local_centroid.y
+            
+            # Convert to WORLD coordinates
+            world_cx = center.x + local_cx
+            world_cy = center.y + local_cy
+            
+            # Convert vertices to be relative to new centroid
+            relative_vertices = (coords - np.array([local_cx, local_cy])).tolist()
+            
+            # Create new polygon in pymunk at correct WORLD position
+            new_shape = create_polygon(
+                space,
+                relative_vertices,
+                world_cx,
+                world_cy,
+                initial_velocity=velocity
+            )
+            new_shape.collision_type = 2
+            new_shape.idx = next_idx
+            next_idx += 1
+            
+            # Minimal separation velocity
+            new_center_vec = Vec2d(world_cx, world_cy)
+            try:
+                separation_dir = (new_center_vec - center).normalized()
+            except ZeroDivisionError:
+                separation_dir = Vec2d(np.random.uniform(-1, 1), np.random.uniform(-1, 1)).normalized()
+            new_shape.body.velocity += separation_dir * FRACTURE_SEPARATION_VELOCITY
+            
+            # Preserve angular velocity
+            new_shape.body.angular_velocity = angular_velocity
+            
+            # Create new state for this piece
+            new_area = split_poly.area
+            new_state = IceFloeState(new_shape, new_area, thickness=thickness)
+            ice_floe_states[new_shape.idx] = new_state
+            
+            new_floes.append(new_shape)
+            
+        except Exception:
+            continue
+    
+    # Mark original as fractured
+    ice_state.has_fractured = True
+    
+    return new_floes, next_idx
 
 
 def fracture_ice_floe(
