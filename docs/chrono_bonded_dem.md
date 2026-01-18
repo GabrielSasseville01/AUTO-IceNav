@@ -159,10 +159,41 @@ for poly in polygons:
 | Parameter | Paper Value | Description |
 |-----------|-------------|-------------|
 | `density` | 920 kg/m³ | Ice density |
-| `youngs_modulus` | 1 GPa | Elastic modulus |
+| `youngs_modulus` | 1-3 GPa | Elastic modulus (CRITICAL: must be GPa, not MPa!) |
 | `tensile_strength` | 1.6 MPa | Bond tensile limit |
 | `shear_strength` | 1.0 MPa | Bond shear limit |
 | `friction` | 0.577 | tan(30°) friction angle |
+| `restitution` | 0.05 | Low for brittle behavior (NOT 0.3!) |
+
+### Critical SMC Contact Parameters
+
+These parameters in `chrono_backend.py` are **essential** for correct behavior:
+
+| Parameter | Correct Value | Wrong Value | Effect if Wrong |
+|-----------|---------------|-------------|-----------------|
+| `SetYoungModulus` | 1e9 (1 GPa) | 1e7 | Rubber-like deformation |
+| `SetRestitution` | 0.05 | 0.3 | Bouncy collisions |
+| `SetKn` | 1e9 | 1e6 | Squishy contacts |
+| `SetGn/Gt` | 2e5 | 5e3 | Oscillations/ringing |
+
+### Timestep Requirements
+
+The paper uses **dt = 1e-5 s** (0.01 ms). Larger timesteps cause instability:
+
+| Timestep | Behavior |
+|----------|----------|
+| 1e-5 s | Paper standard - stable, correct |
+| 1e-4 s | Usually OK with high damping |
+| 1e-3 s | May be unstable, squishy feel |
+| 5e-3 s | Too large - elastic rebound, bouncy |
+
+### Damping (ξ = 0.1 of critical)
+
+From Eq. 10 in paper:
+```python
+xi = 0.1  # 10% of critical damping
+G_n = 2 * xi * sqrt(m * K_n)  # Normal damping coefficient
+```
 
 **Note**: For visible fracture at simulation scale, strengths may need scaling down (e.g., 50-100 kPa).
 
@@ -196,6 +227,29 @@ With `bond_type: rigid` and appropriate parameters:
 2. **Particle Scaling**: Real ice uses cm-scale particles; simulation uses m-scale
 3. **Bond Strength Calibration**: May need tuning for specific scenarios
 4. **MPC Integration**: Full sim2d.py integration pending
+
+### ⚠️ Potential Issues to Watch For
+
+Based on DEM ice simulation literature, watch for these symptoms:
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| **Squishy/rubber feel** | Young's modulus too low | Use E = 1-3 GPa |
+| **Bouncy collisions** | Restitution too high | Set restitution = 0.05 |
+| **Oscillations/ringing** | Damping too low | Increase Gn/Gt to 2e5 |
+| **Particles go through each other** | Timestep too large | Use dt ≤ 1e-4 s |
+| **Bonds stretch like rubber** | Missing alpha scaling | K_n = α × A/d × E |
+| **No bending resistance** | Bonds only carry forces | Need moment-carrying bonds |
+
+### Missing Features (vs Paper)
+
+1. **Moment-carrying bonds**: Current bonds (`ChLinkDistance`) only resist normal/shear forces, not bending moments. This makes the assembly softer than real ice.
+
+2. **Rolling resistance**: No rolling friction between particles.
+
+3. **Heterogeneity**: All bonds are identical. Real ice has random variations (Weibull distribution) that affect crack patterns.
+
+4. **Softening modulus**: Paper uses 5% softening (H_n = 0.05 × K_n) for quasi-brittle behavior.
 
 ## Next Steps
 

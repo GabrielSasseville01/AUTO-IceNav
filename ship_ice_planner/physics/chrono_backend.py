@@ -192,17 +192,27 @@ class ChronoIceSimulator:
         # High bulk modulus causes numerical instability with typical time steps
         self._contact_material = chrono.ChContactMaterialSMC()
         self._contact_material.SetFriction(self.material.friction)
-        self._contact_material.SetRestitution(0.1)  # Low for energy dissipation
         
-        # Contact stiffness - much lower than bulk modulus for stability
-        self._contact_material.SetYoungModulus(1e7)  # 10 MPa contact stiffness
-        self._contact_material.SetPoissonRatio(0.3)
+        # === CRITICAL PARAMETERS (from Celigueta et al. 2019) ===
+        # Low restitution for brittle behavior (paper recommends 0.05)
+        self._contact_material.SetRestitution(0.05)
         
-        # SMC-specific damping coefficients for numerical stability
-        self._contact_material.SetKn(1e6)   # Normal contact stiffness
-        self._contact_material.SetKt(1e5)   # Tangential contact stiffness  
-        self._contact_material.SetGn(5e3)   # Normal damping coefficient
-        self._contact_material.SetGt(5e3)   # Tangential damping coefficient
+        # Young's modulus: 1-3 GPa for sea ice (paper uses 1 GPa)
+        self._contact_material.SetYoungModulus(1e9)  # 1 GPa
+        self._contact_material.SetPoissonRatio(0.33)
+        
+        # Contact stiffness (alpha-scaled per Eq. 13)
+        # K_n = alpha * A_ij / d_ij * E, where alpha ≈ 2.5 for typical packing
+        # For particle radius r, A_ij ≈ π*r², d_ij ≈ 2*r
+        # K_n ≈ 2.5 * π * r / 2 * E ≈ 4 * r * E
+        # With r=1m, E=1e9: K_n ≈ 4e9 N/m
+        self._contact_material.SetKn(1e9)   # High normal stiffness for rigid feel
+        self._contact_material.SetKt(1e9 / (2 * 1.33))  # K_t = K_n / 2(1+ν)
+        
+        # Damping: 10% of critical damping (paper: ξ = 0.1)
+        # G = 2 * ξ * sqrt(m * K), with m~1000kg, K~1e9: G ≈ 2 * 0.1 * sqrt(1e12) ≈ 2e5
+        self._contact_material.SetGn(2e5)   # Normal damping - prevents bouncing
+        self._contact_material.SetGt(2e5)   # Tangential damping
         
     def create_ship(self, 
                     position: tuple[float, float],

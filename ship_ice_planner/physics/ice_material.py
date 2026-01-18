@@ -65,7 +65,7 @@ class IceMaterialParams:
     # Contact/friction properties
     # Paper Table 3: friction angle φ = 30°, so μ = tan(30°) = 0.577
     friction: float = 0.577  # Mohr-Coulomb friction coefficient
-    restitution: float = 0.3
+    restitution: float = 0.05  # Low for brittle behavior (paper recommends 0.05)
     
     # Geometric defaults
     thickness: float = 1.0  # meters
