@@ -763,7 +763,12 @@ class Plot:
             # update the gui state
             cv.blit(self.sim_fig.bbox)
         cv.flush_events()
-        # self.save(save_fig_dir, suffix)
+        if save_fig_dir:
+            print(f"Saving frame to {save_fig_dir} suffix {suffix}")
+            try:
+                self.save(save_fig_dir, suffix, im_format='png')
+            except Exception as e:
+                print(f"Failed to save frame: {e}")
 
         if self.save_animation:
             self.moviewriter.grab_frame()
@@ -790,9 +795,9 @@ class Plot:
                 raise RuntimeError
         try:
             self._bg = cv.copy_from_bbox(cv.figure.bbox)
+            self._draw_animated()
         except AttributeError:
             pass  # this seems to happen when trying to save a pdf
-        self._draw_animated()
     # ----------------------------------------------------------- #
 
     def close(self):

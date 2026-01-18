@@ -10,7 +10,9 @@ from typing import List, Tuple, Dict
 import numpy as np
 import pymunk
 from pymunk import Vec2d, Poly
-from shapely.geometry import Polygon, Point, LineString
+from shapely.geometry import Polygon, Point, LineString, MultiPolygon
+from shapely.ops import unary_union
+from scipy.spatial import Voronoi
 
 from ship_ice_planner.utils.sim_utils import (
     ICE_DENSITY, ICE_THICKNESS, create_polygon, list_vec2d_to_numpy
@@ -18,13 +20,28 @@ from ship_ice_planner.utils.sim_utils import (
 from ship_ice_planner.geometry.polygon import poly_area
 
 # Fracturing parameters
-FRACTURE_ENABLED = False
+FRACTURE_ENABLED = True  # Enable SubZero-style stress-based fracturing
 FRACTURE_BASE_THRESHOLD = 1e6  # N·s (impulse threshold for small floe)
 FRACTURE_SIZE_EXPONENT = 0.5  # How fracture threshold scales with size
 FRACTURE_MIN_SIZE = 2.0  # m (minimum floe radius before it disappears)
 FRACTURE_NUM_PIECES_MIN = 2
 FRACTURE_NUM_PIECES_MAX = 4
 FRACTURE_SEPARATION_VELOCITY = 0.5  # m/s
+
+# SubZero-style stress-based fracturing parameters
+# Yield criterion parameters (from SubZero fracture.m)
+PSTAR = 2.25e5           # Pa - Ice strength parameter (Hibler VP rheology)
+C_CONCENTRATION = 20     # Concentration factor for yield strength
+Q_MOHR = 5.2             # Mohr's cone shape parameter
+SIGMA_C = 250e3          # Pa - Compressive strength for Mohr's cone
+SIGMA_11 = -3.375e4      # Pa - Stress parameter for yield curve
+
+# Fracture mechanism parameters
+NUM_VORONOI_PIECES = 3   # Number of pieces per fracture (SubZero default)
+STRESS_HISTORY_SIZE = 10 # Number of timesteps for stress averaging
+CORNER_GRIND_PROB = 0.3  # Probability of corner grinding per eligible corner
+CORNER_ANGLE_THRESHOLD = 120.0  # degrees - corners sharper than this may break
+MIN_CORNER_FRAGMENT_AREA = 1.0  # m² - minimum area for corner fragments
 
 # Ridging parameters
 RIDGING_ENABLED = True
@@ -54,34 +71,424 @@ ICE_BULK_DENSITY = 917.0  # kg/m³ - density of consolidated ice (less than pure
 RIDGE_SAIL_HEIGHT_FACTOR = 0.3  # Sail height as fraction of total accumulated ice height
 
 
-class IceFloeState:
-    """Tracks state of an ice floe for fracturing mechanics."""
+# ==============================================================================
+# Yield Criterion Functions (adapted from SubZero fracture.m)
+# ==============================================================================
+
+def compute_mohr_cone_envelope() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute Mohr's Cone yield envelope vertices.
     
-    def __init__(self, shape: Poly, initial_area: float):
+    Adapted from SubZero fracture.m lines 21-28:
+    Uses Mohr-Coulomb failure criterion with parameters q and SigC.
+    
+    Returns:
+        Tuple of (x_vertices, y_vertices, shapely_polygon) defining yield envelope
+    """
+    q = Q_MOHR
+    SigC = SIGMA_C
+    
+    # Compute Mohr's cone vertices (from SubZero)
+    Sig1 = (1/q + 1) * SigC / (1/q - q)
+    Sig2 = q * Sig1 + SigC
+    Sig11 = SIGMA_11
+    Sig22 = q * Sig11 + SigC
+    
+    # Yield envelope vertices (negated as in SubZero)
+    MohrX = np.array([-Sig1, -Sig11, -Sig22])
+    MohrY = np.array([-Sig2, -Sig22, -Sig11])
+    
+    # Create shapely polygon for point-in-polygon testing
+    vertices = list(zip(MohrX, MohrY))
+    if len(vertices) >= 3:
+        yield_polygon = Polygon(vertices)
+    else:
+        yield_polygon = None
+    
+    return MohrX, MohrY, yield_polygon
+
+
+def compute_elliptical_yield_envelope(
+    mean_thickness: float,
+    concentration: float = 1.0
+) -> Tuple[np.ndarray, np.ndarray, Polygon]:
+    """
+    Compute elliptical yield envelope (Hibler VP rheology).
+    
+    Adapted from SubZero fracture.m lines 8-18:
+    P = Pstar * h * exp(-C * (1 - concentration))
+    
+    Args:
+        mean_thickness: Mean ice thickness (m)
+        concentration: Ice concentration (0-1)
+    
+    Returns:
+        Tuple of (x_coords, y_coords, shapely_polygon) defining yield envelope
+    """
+    # Ice strength parameter
+    P = PSTAR * mean_thickness * np.exp(-C_CONCENTRATION * (1 - concentration))
+    
+    # Ellipse parameters (from SubZero)
+    a = P * np.sqrt(2) / 2
+    b = a / 2
+    
+    # Generate ellipse points
+    t = np.linspace(0, 2 * np.pi, 100)
+    x = a * np.cos(t)
+    y = b * np.sin(t)
+    
+    # Rotate 45 degrees (as in SubZero)
+    angle = np.pi / 4
+    x_rot = x * np.cos(angle) - y * np.sin(angle)
+    y_rot = x * np.sin(angle) + y * np.cos(angle)
+    
+    # Translate to center at (-P/2, -P/2)
+    x_final = x_rot - P / 2
+    y_final = y_rot - P / 2
+    
+    # Create shapely polygon
+    vertices = list(zip(x_final, y_final))
+    yield_polygon = Polygon(vertices)
+    
+    return x_final, y_final, yield_polygon
+
+
+def check_yield_criterion(
+    sigma1: float,
+    sigma2: float,
+    yield_type: str = 'mohr',
+    mean_thickness: float = 1.0,
+    concentration: float = 1.0
+) -> bool:
+    """
+    Check if principal stresses are inside the yield envelope.
+    
+    Args:
+        sigma1: Maximum principal stress (Pa)
+        sigma2: Minimum principal stress (Pa)
+        yield_type: 'mohr' for Mohr's cone or 'elliptical' for Hibler VP
+        mean_thickness: Mean ice thickness for elliptical criterion (m)
+        concentration: Ice concentration for elliptical criterion (0-1)
+    
+    Returns:
+        True if stresses are INSIDE yield envelope (no fracture),
+        False if OUTSIDE (should fracture)
+    """
+    if yield_type == 'mohr':
+        _, _, yield_polygon = compute_mohr_cone_envelope()
+    else:  # elliptical
+        _, _, yield_polygon = compute_elliptical_yield_envelope(
+            mean_thickness, concentration
+        )
+    
+    if yield_polygon is None:
+        return True  # Default to no fracture if envelope invalid
+    
+    # Check if point (sigma1, sigma2) is inside yield envelope
+    point = Point(sigma1, sigma2)
+    return yield_polygon.contains(point)
+
+
+def compute_fracture_probability(
+    sigma1: float,
+    sigma2: float,
+    yield_type: str = 'mohr',
+    mean_thickness: float = 1.0,
+    concentration: float = 1.0
+) -> float:
+    """
+    Compute probability of fracture based on distance from yield envelope.
+    
+    Returns higher probability for stresses further outside the envelope.
+    
+    Args:
+        sigma1: Maximum principal stress (Pa)
+        sigma2: Minimum principal stress (Pa)
+        yield_type: 'mohr' or 'elliptical'
+        mean_thickness: Mean ice thickness (m)
+        concentration: Ice concentration (0-1)
+    
+    Returns:
+        Fracture probability (0 to 1)
+    """
+    if yield_type == 'mohr':
+        _, _, yield_polygon = compute_mohr_cone_envelope()
+    else:
+        _, _, yield_polygon = compute_elliptical_yield_envelope(
+            mean_thickness, concentration
+        )
+    
+    if yield_polygon is None:
+        return 0.0
+    
+    point = Point(sigma1, sigma2)
+    
+    if yield_polygon.contains(point):
+        return 0.0  # Inside envelope, no fracture
+    
+    # Distance from boundary (positive = outside)
+    distance = point.distance(yield_polygon.boundary)
+    
+    # Convert distance to probability (saturates at 1.0)
+    # Scale factor based on typical stress magnitudes
+    scale = SIGMA_C / 10.0  # Characteristic stress scale
+    probability = min(1.0, distance / scale)
+    
+    return probability
+
+
+class IceFloeState:
+    """
+    Tracks state of an ice floe for stress-based fracturing mechanics.
+    
+    Adapted from SubZero's stress tensor approach:
+    - Computes 2D stress tensor from contact forces and positions
+    - Maintains time-averaged stress history
+    - Uses principal stress analysis for yield criterion
+    """
+    
+    def __init__(self, shape: Poly, initial_area: float, thickness: float = None):
         self.shape = shape
         self.initial_area = initial_area
+        self.thickness = thickness if thickness is not None else ICE_THICKNESS
+        
+        # Legacy impulse-based tracking (kept for compatibility)
         self.cumulative_impulse = 0.0
         self.max_stress = 0.0
         self.fracture_threshold = self._compute_fracture_threshold(initial_area)
         self.has_fractured = False
+        
+        # SubZero-style stress tensor tracking
+        self.stress_tensor = np.zeros((2, 2))  # Current stress tensor (2x2)
+        self.stress_history = np.zeros((STRESS_HISTORY_SIZE, 2, 2))  # History buffer
+        self.stress_history_idx = 0  # Current index in circular buffer
+        self.stress_count = 0  # Number of stress updates received
+        
+        # Interaction tracking for stress computation
+        self.interactions = []  # List of (force, contact_pos) tuples
+        self.center_position = None  # Floe center position (updated each step)
+        
+        # Principal stresses (computed from tensor)
+        self.principal_stress_1 = 0.0  # Maximum principal stress
+        self.principal_stress_2 = 0.0  # Minimum principal stress
+        
+        # Corner tracking for corner grinding
+        self.corner_contacts = []  # Vertices in contact with other floes
     
     def _compute_fracture_threshold(self, area: float) -> float:
-        """Compute fracture threshold based on floe size."""
-        # Larger floes can withstand more stress
+        """Compute fracture threshold based on floe size (legacy method)."""
         min_area = np.pi * FRACTURE_MIN_SIZE ** 2
-        area_ratio = max(area / min_area, 0.1)  # Prevent division by zero
+        area_ratio = max(area / min_area, 0.1)
         return FRACTURE_BASE_THRESHOLD * (area_ratio ** FRACTURE_SIZE_EXPONENT)
     
     def add_impulse(self, impulse_magnitude: float):
-        """Add impulse from collision."""
+        """Add impulse from collision (legacy method)."""
         self.cumulative_impulse += impulse_magnitude
         self.max_stress = max(self.max_stress, impulse_magnitude)
     
+    def update_stress_from_interactions(self, center_x: float, center_y: float):
+        """
+        Compute stress tensor from contact forces and positions.
+        
+        Adapted from SubZero calc_trajectory.m lines 9-29:
+        Stress = 1/(2*area*h) * (F⊗r + r⊗F)
+        
+        where F is force vector, r is position vector from center to contact point.
+        
+        Args:
+            center_x: X coordinate of floe center
+            center_y: Y coordinate of floe center
+        """
+        self.center_position = (center_x, center_y)
+        
+        if len(self.interactions) == 0:
+            # No interactions, record zero stress
+            current_stress = np.zeros((2, 2))
+        else:
+            # Compute stress tensor from all interactions
+            # Stress = 1/(2*area*h) * sum_k( (r_k ⊗ F_k) + (F_k ⊗ r_k) )
+            stress_sum = np.zeros((2, 2))
+            
+            for force, contact_pos in self.interactions:
+                # Relative position from center to contact point
+                r = np.array([contact_pos[0] - center_x, contact_pos[1] - center_y])
+                F = np.array([force[0], force[1]])
+                
+                # Outer products: r⊗F and F⊗r
+                r_outer_F = np.outer(r, F)
+                F_outer_r = np.outer(F, r)
+                
+                stress_sum += r_outer_F + F_outer_r
+            
+            # Normalize by 2 * area * thickness
+            denominator = 2.0 * self.initial_area * self.thickness
+            if denominator > 1e-10:
+                current_stress = stress_sum / denominator
+            else:
+                current_stress = np.zeros((2, 2))
+        
+        # Store in history buffer (circular)
+        self.stress_history[self.stress_history_idx] = current_stress
+        self.stress_history_idx = (self.stress_history_idx + 1) % STRESS_HISTORY_SIZE
+        self.stress_count = min(self.stress_count + 1, STRESS_HISTORY_SIZE)
+        
+        # Compute time-averaged stress tensor
+        if self.stress_count > 0:
+            self.stress_tensor = np.mean(self.stress_history[:self.stress_count], axis=0)
+        
+        # Compute principal stresses from eigenvalue decomposition
+        self._compute_principal_stresses()
+        
+        # Clear interactions for next timestep
+        self.interactions = []
+    
+    def _compute_principal_stresses(self):
+        """
+        Compute principal stresses from the stress tensor.
+        
+        Principal stresses are eigenvalues of the 2D stress tensor.
+        σ1 = max eigenvalue (maximum principal stress)
+        σ2 = min eigenvalue (minimum principal stress)
+        """
+        try:
+            eigenvalues = np.linalg.eigvalsh(self.stress_tensor)
+            self.principal_stress_1 = np.max(eigenvalues)
+            self.principal_stress_2 = np.min(eigenvalues)
+        except np.linalg.LinAlgError:
+            # Fallback if eigenvalue computation fails
+            self.principal_stress_1 = 0.0
+            self.principal_stress_2 = 0.0
+    
+    def add_interaction(self, force: Tuple[float, float], contact_pos: Tuple[float, float]):
+        """
+        Add a contact interaction for stress computation.
+        
+        Args:
+            force: (Fx, Fy) force vector at contact point
+            contact_pos: (x, y) position of contact point
+        """
+        self.interactions.append((force, contact_pos))
+    
+    def add_corner_contact(self, vertex_idx: int, contact_pos: Tuple[float, float]):
+        """
+        Track a corner vertex that is in contact with another floe.
+        
+        Args:
+            vertex_idx: Index of the vertex in contact
+            contact_pos: (x, y) position of contact
+        """
+        self.corner_contacts.append((vertex_idx, contact_pos))
+    
+    def clear_corner_contacts(self):
+        """Clear corner contact tracking for next timestep."""
+        self.corner_contacts = []
+    
     def should_fracture(self) -> bool:
-        """Check if floe should fracture."""
+        """
+        Check if floe should fracture using legacy impulse-based method.
+        
+        Note: For stress-based fracturing, use should_fracture_stress() instead.
+        """
         if self.has_fractured:
             return False
         return self.cumulative_impulse > self.fracture_threshold
+    
+    def should_fracture_stress(
+        self,
+        yield_type: str = 'mohr',
+        mean_thickness: float = None,
+        concentration: float = 1.0,
+        min_area: float = None
+    ) -> bool:
+        """
+        Check if floe should fracture using stress-based yield criterion.
+        
+        Adapted from SubZero fracture.m:
+        - Computes principal stresses from stress tensor
+        - Checks if principal stresses are outside yield envelope
+        - Returns True if floe should fracture
+        
+        Args:
+            yield_type: 'mohr' for Mohr's cone or 'elliptical' for Hibler VP
+            mean_thickness: Mean ice thickness for elliptical criterion (default: self.thickness)
+            concentration: Ice concentration for elliptical criterion (0-1)
+            min_area: Minimum floe area (won't fracture if smaller than this)
+        
+        Returns:
+            True if floe should fracture based on yield criterion
+        """
+        if self.has_fractured:
+            return False
+        
+        # Check minimum size
+        if min_area is not None and self.initial_area < min_area:
+            return False
+        
+        # Need some stress history before fracturing
+        if self.stress_count < 3:
+            return False
+        
+        # Use self thickness if not provided
+        if mean_thickness is None:
+            mean_thickness = self.thickness
+        
+        # Check yield criterion
+        inside_envelope = check_yield_criterion(
+            self.principal_stress_1,
+            self.principal_stress_2,
+            yield_type=yield_type,
+            mean_thickness=mean_thickness,
+            concentration=concentration
+        )
+        
+        # Fracture if OUTSIDE the yield envelope
+        return not inside_envelope
+    
+    def get_fracture_probability(
+        self,
+        yield_type: str = 'mohr',
+        mean_thickness: float = None,
+        concentration: float = 1.0
+    ) -> float:
+        """
+        Get probability of fracture based on stress state.
+        
+        Args:
+            yield_type: 'mohr' or 'elliptical'
+            mean_thickness: Mean ice thickness (default: self.thickness)
+            concentration: Ice concentration (0-1)
+        
+        Returns:
+            Fracture probability (0 to 1)
+        """
+        if self.has_fractured:
+            return 0.0
+        
+        if mean_thickness is None:
+            mean_thickness = self.thickness
+        
+        return compute_fracture_probability(
+            self.principal_stress_1,
+            self.principal_stress_2,
+            yield_type=yield_type,
+            mean_thickness=mean_thickness,
+            concentration=concentration
+        )
+    
+    def get_stress_state(self) -> Dict:
+        """
+        Get current stress state for analysis/debugging.
+        
+        Returns:
+            Dictionary with stress tensor, principal stresses, etc.
+        """
+        return {
+            'stress_tensor': self.stress_tensor.copy(),
+            'principal_stress_1': self.principal_stress_1,
+            'principal_stress_2': self.principal_stress_2,
+            'stress_count': self.stress_count,
+            'cumulative_impulse': self.cumulative_impulse,
+        }
 
 
 class RidgeZone:
@@ -433,15 +840,125 @@ class RidgeZone:
         return self
 
 
+def bounded_voronoi_tessellation(
+    boundary_polygon: Polygon,
+    num_seeds: int = NUM_VORONOI_PIECES,
+    max_attempts: int = 100
+) -> List[Polygon]:
+    """
+    Generate bounded Voronoi tessellation within a polygon.
+    
+    Adapted from SubZero's polybnd_voronoi.m and fracture_floe.m:
+    - Places random seed points inside the polygon
+    - Computes Voronoi diagram
+    - Clips Voronoi cells to polygon boundary
+    
+    Args:
+        boundary_polygon: Shapely Polygon defining the boundary
+        num_seeds: Number of Voronoi seed points (= number of pieces)
+        max_attempts: Maximum attempts to place valid seeds
+    
+    Returns:
+        List of Shapely Polygons representing the Voronoi cells
+    """
+    if not boundary_polygon.is_valid:
+        boundary_polygon = boundary_polygon.buffer(0)
+        if not boundary_polygon.is_valid:
+            return []
+    
+    # Get bounding box
+    minx, miny, maxx, maxy = boundary_polygon.bounds
+    rmax = max(maxx - minx, maxy - miny) / 2
+    
+    # Generate random seed points inside the polygon
+    seeds = []
+    attempts = 0
+    while len(seeds) < num_seeds and attempts < max_attempts * num_seeds:
+        # Generate random point within bounding box
+        x = np.random.uniform(minx, maxx)
+        y = np.random.uniform(miny, maxy)
+        point = Point(x, y)
+        
+        if boundary_polygon.contains(point):
+            seeds.append([x, y])
+        attempts += 1
+    
+    if len(seeds) < 2:
+        # Not enough seeds, can't tessellate
+        return []
+    
+    seeds = np.array(seeds)
+    
+    # Add far-away points to bound the Voronoi diagram
+    # This ensures all cells are bounded (SubZero uses bounding box approach)
+    far_distance = rmax * 10
+    far_points = np.array([
+        [minx - far_distance, miny - far_distance],
+        [maxx + far_distance, miny - far_distance],
+        [maxx + far_distance, maxy + far_distance],
+        [minx - far_distance, maxy + far_distance],
+    ])
+    all_points = np.vstack([seeds, far_points])
+    
+    try:
+        vor = Voronoi(all_points)
+    except Exception:
+        return []
+    
+    # Extract Voronoi cells for original seeds only (not far points)
+    voronoi_cells = []
+    for i in range(len(seeds)):
+        region_idx = vor.point_region[i]
+        if region_idx == -1:
+            continue
+        
+        region = vor.regions[region_idx]
+        if -1 in region or len(region) < 3:
+            continue
+        
+        # Get vertices of this Voronoi cell
+        try:
+            cell_vertices = [vor.vertices[j] for j in region]
+            cell_poly = Polygon(cell_vertices)
+            
+            if not cell_poly.is_valid:
+                cell_poly = cell_poly.buffer(0)
+            
+            # Clip to boundary polygon
+            clipped = cell_poly.intersection(boundary_polygon)
+            
+            if clipped.is_empty:
+                continue
+            
+            # Handle MultiPolygon result
+            if isinstance(clipped, MultiPolygon):
+                for geom in clipped.geoms:
+                    if isinstance(geom, Polygon) and geom.area > 0.1:
+                        voronoi_cells.append(geom)
+            elif isinstance(clipped, Polygon) and clipped.area > 0.1:
+                voronoi_cells.append(clipped)
+                
+        except Exception:
+            continue
+    
+    return voronoi_cells
+
+
 def fracture_ice_floe(
     space: pymunk.Space,
     ice_shape: Poly,
     ice_state: IceFloeState,
     ice_floe_states: Dict[int, IceFloeState],
-    next_idx: int = None
+    next_idx: int = None,
+    use_voronoi: bool = True
 ) -> Tuple[List[Poly], int]:
     """
     Split an ice floe into smaller pieces when it fractures.
+    
+    Adapted from SubZero's fracture_floe.m:
+    - Uses Voronoi tessellation to create realistic fracture patterns
+    - Preserves mass and momentum
+    - Creates new floe state tracking for each piece
     
     Args:
         space: Pymunk physics space
@@ -449,6 +966,7 @@ def fracture_ice_floe(
         ice_state: State tracking for the floe
         ice_floe_states: Dictionary mapping shape.idx to IceFloeState
         next_idx: Next available index for new floes (if None, will use max existing + 1)
+        use_voronoi: If True, use Voronoi tessellation; otherwise use simple wedge splitting
     
     Returns:
         Tuple of (list of new ice floe shapes, next available idx)
@@ -463,6 +981,7 @@ def fracture_ice_floe(
     angular_velocity = ice_shape.body.angular_velocity
     mass = ice_shape.mass
     area = ice_state.initial_area
+    thickness = ice_state.thickness
     
     # Check minimum size
     radius = np.sqrt(area / np.pi)
@@ -486,156 +1005,459 @@ def fracture_ice_floe(
         else:
             next_idx = 0
     
-    # Determine number of pieces
-    num_pieces = np.random.randint(FRACTURE_NUM_PIECES_MIN, FRACTURE_NUM_PIECES_MAX + 1)
-    
-    # Use shapely for proper polygon splitting
+    # Create shapely polygon from vertices
     try:
-        # Create shapely polygon
         poly = Polygon(vertices)
         if not poly.is_valid:
-            poly = poly.buffer(0)  # Fix invalid polygon
+            poly = poly.buffer(0)
             if not poly.is_valid or poly.area < 0.1:
-                # Polygon too small or still invalid, skip fracturing
                 return [], next_idx
-        
-        # Create split lines from center
+    except Exception:
+        return [], next_idx
+    
+    split_polygons = []
+    
+    # Try Voronoi tessellation first (SubZero approach)
+    if use_voronoi:
+        split_polygons = bounded_voronoi_tessellation(
+            poly, 
+            num_seeds=NUM_VORONOI_PIECES
+        )
+    
+    # Fallback to wedge splitting if Voronoi fails
+    if len(split_polygons) < 2:
+        num_pieces = np.random.randint(FRACTURE_NUM_PIECES_MIN, FRACTURE_NUM_PIECES_MAX + 1)
         angles = np.linspace(0, 2 * np.pi, num_pieces, endpoint=False)
-        center_pt = Point(center.x, center.y)
+        centroid = poly.centroid
+        max_dist = max(np.linalg.norm(v - np.array([centroid.x, centroid.y])) for v in vertices) * 2
         
-        # Create a large bounding box for split lines
-        max_dist = max(np.linalg.norm(v - np.array([center.x, center.y])) for v in vertices) * 2
-        
-        split_polygons = []
         for i, angle in enumerate(angles):
             next_angle = angles[(i + 1) % num_pieces]
-            
-            # Create wedge polygon for this sector
-            # Points: center, point at angle, point at next_angle, back to center
             wedge_points = [
-                (center.x, center.y),
-                (center.x + max_dist * np.cos(angle), center.y + max_dist * np.sin(angle)),
-                (center.x + max_dist * np.cos(next_angle), center.y + max_dist * np.sin(next_angle)),
+                (centroid.x, centroid.y),
+                (centroid.x + max_dist * np.cos(angle), centroid.y + max_dist * np.sin(angle)),
+                (centroid.x + max_dist * np.cos(next_angle), centroid.y + max_dist * np.sin(next_angle)),
             ]
-            wedge = Polygon(wedge_points)
-            
-            # Intersect with original polygon
             try:
+                wedge = Polygon(wedge_points)
                 sector = poly.intersection(wedge)
+                if not sector.is_empty and sector.area > 0.1:
+                    if isinstance(sector, MultiPolygon):
+                        for geom in sector.geoms:
+                            if isinstance(geom, Polygon) and geom.area > 0.1:
+                                split_polygons.append(geom)
+                    elif isinstance(sector, Polygon):
+                        split_polygons.append(sector)
             except Exception:
-                # Skip this sector if intersection fails
                 continue
-            
-            if sector.is_empty or (hasattr(sector, 'area') and sector.area < 0.1):
-                continue
-            
-            # Handle MultiPolygon (shouldn't happen but be safe)
-            if hasattr(sector, 'geoms'):
-                for geom in sector.geoms:
-                    if isinstance(geom, Polygon) and geom.area > 0.1:  # Minimum area
-                        split_polygons.append(geom)
-            elif isinstance(sector, Polygon) and sector.area > 0.1:
-                split_polygons.append(sector)
-        
-        # If splitting failed, create simple pieces
-        if len(split_polygons) < 2:
-            # Fallback: create 2 pieces using a line through center
-            split_angle = np.random.uniform(0, 2 * np.pi)
-            split_line = LineString([
-                (center.x - max_dist * np.cos(split_angle), center.y - max_dist * np.sin(split_angle)),
-                (center.x + max_dist * np.cos(split_angle), center.y + max_dist * np.sin(split_angle))
-            ])
-            # Use buffer to create two halves
-            half1 = poly.buffer(0.01).difference(split_line.buffer(0.01))
-            half2 = poly.difference(half1)
-            split_polygons = [p for p in [half1, half2] if isinstance(p, Polygon) and p.area > 0.1]
-    
-    except Exception as e:
-        # If shapely fails, use simple radial splitting
-        import warnings
-        warnings.filterwarnings('ignore', category=RuntimeWarning)  # Suppress shapely warnings
-        split_polygons = None
     
     # Create new floes from split polygons
     new_floes = []
-    center_np = np.array([center.x, center.y])
+    original_area = poly.area
     
-    if split_polygons:
-        for i, split_poly in enumerate(split_polygons):
+    for split_poly in split_polygons:
+        try:
             # Get vertices from shapely polygon
-            coords = np.array(split_poly.exterior.coords[:-1])  # Remove duplicate last point
+            if hasattr(split_poly, 'exterior'):
+                coords = np.array(split_poly.exterior.coords[:-1])
+            else:
+                continue
             
             if len(coords) < 3:
                 continue
             
-            # Compute new center (centroid of split piece)
-            new_center = split_poly.centroid
-            new_center_vec = Vec2d(new_center.x, new_center.y)
+            # Compute local centroid of split piece (in parent's local frame)
+            local_centroid = split_poly.centroid
+            local_cx, local_cy = local_centroid.x, local_centroid.y
             
-            # Convert to relative coordinates
-            relative_vertices = (coords - np.array([new_center.x, new_center.y])).tolist()
+            # CRITICAL: Convert to WORLD coordinates
+            # SubZero: FloeNEW.Xi = floe.Xi+Xi; FloeNEW.Yi = floe.Yi+Yi;
+            world_cx = center.x + local_cx
+            world_cy = center.y + local_cy
             
-            # Create new polygon
+            # Convert vertices to be relative to new centroid (local frame for new body)
+            relative_vertices = (coords - np.array([local_cx, local_cy])).tolist()
+            
+            # Create new polygon in pymunk at correct WORLD position
             new_shape = create_polygon(
                 space,
                 relative_vertices,
-                new_center.x,
-                new_center.y,
-                initial_velocity=velocity
+                world_cx,
+                world_cy,
+                initial_velocity=velocity  # Inherit parent velocity (SubZero behavior)
             )
             new_shape.collision_type = 2
-            new_shape.idx = next_idx  # Set unique index
+            new_shape.idx = next_idx
             next_idx += 1
             
-            # Add separation velocity (radial from original center)
-            separation_dir = (new_center_vec - center).normalized()
+            # SubZero: pieces inherit parent velocity, no artificial separation
+            # Only add minimal separation to prevent immediate re-collision
+            new_center_vec = Vec2d(world_cx, world_cy)
+            try:
+                separation_dir = (new_center_vec - center).normalized()
+            except ZeroDivisionError:
+                separation_dir = Vec2d(np.random.uniform(-1, 1), np.random.uniform(-1, 1)).normalized()
             new_shape.body.velocity += separation_dir * FRACTURE_SEPARATION_VELOCITY
             
-            # Track new floe
+            # Preserve angular velocity (from SubZero)
+            new_shape.body.angular_velocity = angular_velocity * 0.5
+            
+            # Track new floe with inherited thickness
             new_area = split_poly.area
-            new_state = IceFloeState(new_shape, new_area)
+            # SubZero keeps floe thickness constant; mass scales with area via the body's density*area.
+            # Thickness is only used for stress normalization (Pa = N / m^2), so it should not shrink with area.
+            new_state = IceFloeState(new_shape, new_area, thickness=thickness)
             ice_floe_states[new_shape.idx] = new_state
             
             new_floes.append(new_shape)
-    else:
-        # Fallback: simple radial splitting
-        angles = np.linspace(0, 2 * np.pi, num_pieces, endpoint=False)
-        for i, angle in enumerate(angles):
-            # Simple approach: take every nth vertex
-            start_idx = int(i * len(vertices) / num_pieces)
-            end_idx = int((i + 1) * len(vertices) / num_pieces)
-            sector_vertices = vertices[start_idx:end_idx]
             
-            if len(sector_vertices) < 3:
-                continue
-            
-            # Use centroid of sector
-            sector_poly = Polygon(sector_vertices)
-            new_center = sector_poly.centroid
-            relative_vertices = (sector_vertices - np.array([new_center.x, new_center.y])).tolist()
-            
-            new_shape = create_polygon(
-                space,
-                relative_vertices,
-                new_center.x,
-                new_center.y,
-                initial_velocity=velocity
-            )
-            new_shape.collision_type = 2
-            new_shape.idx = next_idx  # Set unique index
-            next_idx += 1
-            
-            separation_dir = Vec2d(new_center.x - center.x, new_center.y - center.y).normalized()
-            new_shape.body.velocity += separation_dir * FRACTURE_SEPARATION_VELOCITY
-            
-            new_area = sector_poly.area
-            new_state = IceFloeState(new_shape, new_area)
-            ice_floe_states[new_shape.idx] = new_state
-            
-            new_floes.append(new_shape)
+        except Exception:
+            continue
     
     ice_state.has_fractured = True
     return new_floes, next_idx
+
+
+# ==============================================================================
+# Corner Grinding Functions (adapted from SubZero corners.m and frac_corner.m)
+# ==============================================================================
+
+def compute_polygon_angles(vertices: np.ndarray) -> np.ndarray:
+    """
+    Compute interior angles at each vertex of a polygon.
+    
+    Adapted from SubZero's polyangles function.
+    
+    Args:
+        vertices: Nx2 array of polygon vertices
+    
+    Returns:
+        Array of interior angles in degrees for each vertex
+    """
+    n = len(vertices)
+    if n < 3:
+        return np.array([])
+    
+    angles = np.zeros(n)
+    
+    for i in range(n):
+        # Get three consecutive vertices
+        p1 = vertices[(i - 1) % n]
+        p2 = vertices[i]
+        p3 = vertices[(i + 1) % n]
+        
+        # Vectors from p2 to neighbors
+        v1 = p1 - p2
+        v2 = p3 - p2
+        
+        # Compute angle using dot product
+        dot = np.dot(v1, v2)
+        det = v1[0] * v2[1] - v1[1] * v2[0]  # Cross product z-component
+        
+        # Angle in radians
+        angle_rad = np.arctan2(abs(det), dot)
+        
+        # Convert to degrees
+        angles[i] = np.degrees(angle_rad)
+    
+    return angles
+
+
+def identify_grindable_corners(
+    vertices: np.ndarray,
+    contact_indices: List[int],
+    angle_threshold: float = CORNER_ANGLE_THRESHOLD
+) -> List[int]:
+    """
+    Identify corners that are sharp enough to be ground off.
+    
+    Adapted from SubZero corners.m:
+    - Find corners with angles less than threshold
+    - Check if corners are in contact with other floes
+    - Use stochastic selection
+    
+    Args:
+        vertices: Nx2 array of polygon vertices
+        contact_indices: List of vertex indices that are in contact
+        angle_threshold: Maximum angle (degrees) for a corner to be grindable
+    
+    Returns:
+        List of vertex indices that should be ground off
+    """
+    angles = compute_polygon_angles(vertices)
+    if len(angles) == 0:
+        return []
+    
+    # Normal angle for a regular polygon with this many vertices
+    n = len(vertices)
+    normal_angle = 180 - 360 / n
+    
+    grindable = []
+    
+    for i, angle in enumerate(angles):
+        # Check if angle is sharp enough (SubZero: rand > angles/Anorm)
+        is_sharp = np.random.random() > (angle / normal_angle)
+        
+        # Check if in contact
+        is_in_contact = i in contact_indices
+        
+        # Both conditions must be true (SubZero uses logical AND)
+        if is_sharp and is_in_contact:
+            # Additional probability check
+            if np.random.random() < CORNER_GRIND_PROB:
+                grindable.append(i)
+    
+    return grindable
+
+
+def break_corner(
+    poly: Polygon,
+    vertex_idx: int,
+    vertices: np.ndarray
+) -> Tuple[Polygon, Polygon]:
+    """
+    Break off a corner of a polygon.
+    
+    Adapted from SubZero frac_corner.m:
+    - Creates a small triangular piece from the corner
+    - Returns the remaining polygon and the corner fragment
+    
+    Args:
+        poly: Original shapely Polygon
+        vertex_idx: Index of vertex to break off
+        vertices: Nx2 array of polygon vertices
+    
+    Returns:
+        Tuple of (remaining_polygon, corner_fragment)
+    """
+    n = len(vertices)
+    if n < 4:  # Need at least 4 vertices to break a corner
+        return poly, None
+    
+    # Get the corner vertex and neighbors
+    prev_idx = (vertex_idx - 1) % n
+    next_idx = (vertex_idx + 1) % n
+    
+    p_prev = vertices[prev_idx]
+    p_corner = vertices[vertex_idx]
+    p_next = vertices[next_idx]
+    
+    # Calculate distances to neighbors
+    d1 = np.linalg.norm(p_corner - p_prev)
+    d2 = np.linalg.norm(p_corner - p_next)
+    d = min(d1, d2)
+    
+    # Compute corner angle
+    angles = compute_polygon_angles(vertices)
+    if len(angles) == 0:
+        return poly, None
+    
+    alpha = angles[vertex_idx]
+    normal_angle = 180 - 360 / n
+    
+    # How far along each edge to cut (SubZero formula)
+    # Smaller angle = larger cut
+    cut_factor = max(0.1, min(0.4, alpha / normal_angle / 5))
+    
+    # New vertices on each edge
+    new_p1 = p_corner + cut_factor * (p_prev - p_corner) / d1 * d if d1 > 0.01 else p_prev
+    new_p2 = p_corner + cut_factor * (p_next - p_corner) / d2 * d if d2 > 0.01 else p_next
+    
+    # Create corner triangle
+    corner_vertices = np.array([new_p1, p_corner, new_p2])
+    
+    try:
+        corner_poly = Polygon(corner_vertices)
+        if not corner_poly.is_valid or corner_poly.area < MIN_CORNER_FRAGMENT_AREA:
+            return poly, None
+    except Exception:
+        return poly, None
+    
+    # Create remaining polygon by removing corner
+    new_vertices = []
+    for i in range(n):
+        if i == vertex_idx:
+            new_vertices.append(new_p1)
+            new_vertices.append(new_p2)
+        else:
+            new_vertices.append(vertices[i])
+    
+    try:
+        remaining_poly = Polygon(new_vertices)
+        if not remaining_poly.is_valid:
+            remaining_poly = remaining_poly.buffer(0)
+        
+        if remaining_poly.area < 0.1:
+            return poly, None
+            
+    except Exception:
+        return poly, None
+    
+    return remaining_poly, corner_poly
+
+
+def grind_corners(
+    space: pymunk.Space,
+    ice_shape: Poly,
+    ice_state: IceFloeState,
+    ice_floe_states: Dict[int, IceFloeState],
+    contact_vertex_indices: List[int],
+    next_idx: int = None
+) -> Tuple[Poly, List[Poly], int]:
+    """
+    Apply corner grinding to an ice floe.
+    
+    Adapted from SubZero corners.m:
+    - Identifies sharp corners in contact with other floes
+    - Breaks off corners stochastically
+    - Creates small fragment floes from broken corners
+    
+    Args:
+        space: Pymunk physics space
+        ice_shape: The ice floe shape
+        ice_state: State tracking for the floe
+        ice_floe_states: Dictionary mapping shape.idx to IceFloeState
+        contact_vertex_indices: Indices of vertices in contact with other floes
+        next_idx: Next available index for new floes
+    
+    Returns:
+        Tuple of (updated main shape, list of corner fragments, next idx)
+    """
+    vertices = list_vec2d_to_numpy(ice_shape.get_vertices())
+    center = ice_shape.body.position
+    velocity = ice_shape.body.velocity
+    
+    if len(vertices) < 4:
+        return ice_shape, [], next_idx if next_idx is not None else 0
+    
+    # Determine next available index
+    if next_idx is None:
+        if len(ice_floe_states) > 0:
+            next_idx = max(ice_floe_states.keys()) + 1
+        else:
+            next_idx = 0
+    
+    # Identify grindable corners
+    grindable = identify_grindable_corners(vertices, contact_vertex_indices)
+    
+    if len(grindable) == 0:
+        return ice_shape, [], next_idx
+    
+    # Create shapely polygon
+    try:
+        poly = Polygon(vertices)
+        if not poly.is_valid:
+            poly = poly.buffer(0)
+    except Exception:
+        return ice_shape, [], next_idx
+    
+    # Break corners (process from highest index to lowest to preserve indices)
+    fragments = []
+    current_vertices = vertices.copy()
+    current_poly = poly
+    
+    for corner_idx in sorted(grindable, reverse=True):
+        # Adjust index if we've removed corners before this one
+        adjusted_idx = corner_idx
+        for prev_idx in sorted([i for i in grindable if i > corner_idx]):
+            if prev_idx < adjusted_idx:
+                adjusted_idx -= 1
+        
+        remaining, corner_fragment = break_corner(
+            current_poly, 
+            min(adjusted_idx, len(current_vertices) - 1),
+            current_vertices
+        )
+        
+        if corner_fragment is not None and corner_fragment.area >= MIN_CORNER_FRAGMENT_AREA:
+            # Create pymunk body for fragment
+            try:
+                frag_coords = np.array(corner_fragment.exterior.coords[:-1])
+                frag_center = corner_fragment.centroid
+                frag_center_vec = Vec2d(frag_center.x, frag_center.y)
+                
+                relative_verts = (frag_coords - np.array([frag_center.x, frag_center.y])).tolist()
+                
+                # Convert to world coordinates
+                world_center = Vec2d(
+                    center.x + frag_center.x - poly.centroid.x,
+                    center.y + frag_center.y - poly.centroid.y
+                )
+                
+                frag_shape = create_polygon(
+                    space,
+                    relative_verts,
+                    world_center.x,
+                    world_center.y,
+                    initial_velocity=velocity
+                )
+                frag_shape.collision_type = 2
+                frag_shape.idx = next_idx
+                next_idx += 1
+                
+                # Add small separation velocity
+                try:
+                    sep_dir = (frag_center_vec - Vec2d(poly.centroid.x, poly.centroid.y)).normalized()
+                except ZeroDivisionError:
+                    sep_dir = Vec2d(np.random.uniform(-1, 1), np.random.uniform(-1, 1)).normalized()
+                frag_shape.body.velocity += sep_dir * FRACTURE_SEPARATION_VELOCITY * 0.5
+                
+                # Create state for fragment
+                frag_state = IceFloeState(frag_shape, corner_fragment.area, thickness=ice_state.thickness)
+                ice_floe_states[frag_shape.idx] = frag_state
+                
+                fragments.append(frag_shape)
+                
+            except Exception:
+                pass
+        
+        if remaining is not None:
+            current_poly = remaining
+            if hasattr(remaining, 'exterior'):
+                current_vertices = np.array(remaining.exterior.coords[:-1])
+    
+    # Update main floe if corners were removed
+    if len(fragments) > 0 and current_poly.area > 0.1:
+        # Remove old shape
+        old_idx = getattr(ice_shape, 'idx', None)
+        space.remove(ice_shape.body, ice_shape)
+        if old_idx is not None and old_idx in ice_floe_states:
+            del ice_floe_states[old_idx]
+        
+        # Create updated shape
+        try:
+            new_coords = np.array(current_poly.exterior.coords[:-1])
+            new_center = current_poly.centroid
+            relative_verts = (new_coords - np.array([new_center.x, new_center.y])).tolist()
+            
+            # World position
+            world_center = Vec2d(
+                center.x + new_center.x - poly.centroid.x,
+                center.y + new_center.y - poly.centroid.y
+            )
+            
+            new_shape = create_polygon(
+                space,
+                relative_verts,
+                world_center.x,
+                world_center.y,
+                initial_velocity=velocity
+            )
+            new_shape.collision_type = 2
+            new_shape.idx = next_idx
+            next_idx += 1
+            
+            # Create updated state
+            new_state = IceFloeState(new_shape, current_poly.area, thickness=ice_state.thickness)
+            ice_floe_states[new_shape.idx] = new_state
+            
+            return new_shape, fragments, next_idx
+            
+        except Exception:
+            # Failed to create new shape, return original
+            return ice_shape, [], next_idx
+    
+    return ice_shape, fragments, next_idx
 
 
 def compute_compression_force(floe_group: List[Poly]) -> float:

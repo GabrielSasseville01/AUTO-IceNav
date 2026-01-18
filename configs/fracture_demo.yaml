@@ -1,0 +1,102 @@
+#############################################################################
+# Demo config for ship ice fracturing animation
+#############################################################################
+### GLOBAL PARAMS
+output_dir: null            # root directory for storing all experiment output files
+comments: 'Fracturing demo - SubZero style stress-based ice fracturing'
+map_shape:
+  - 300                     # smaller map for quicker demo
+  - 300
+map_file: null              # Use generated obstacles instead of file
+plot:
+  y_axis_limit: 300
+  show: true
+seed: 42
+
+### OBSTACLE GENERATION (if map_file is null)
+obstacle:
+  num_obs: 30               # Moderate number of floes for demo
+  min_r: 8.0                # Larger floes to see fracturing clearly
+  max_r: 25.0
+  obs_inflation: 0.5
+
+### PLANNER PARAMS
+horizon: 200.
+save_paths: false
+path_step_size: 0.02
+planner: 'straight'         # Simple straight path for demo
+a_star:
+  weight: 1
+costmap:
+  scale: 0.5
+  collision_cost_weight: 0.00000048
+  obs_cost_buffer_factor: 0.15
+  ice_resistance_weight: 1
+  sic_kernel: [31, 31]
+  boundary_margin: 2
+  ridge_costmap_file: null
+  ridge_cost_weight: 1.0
+  polygon_file: null
+prim:
+  prim_name: 'PRIM_8H_4'
+  scale: 10
+  step_size: 0.5
+optim:
+  plot: false
+  debug: false
+  anim: false
+  body_point_params:
+    spacing: 3
+    margin: 0
+    weights: null
+    plot: false
+  wp_spacing: 2
+  goal_margin: 0.1
+  horizon: 200.
+  smooth_control_weight: 50000
+  p_opts:
+    ipopt.print_level: 0
+    ipopt.sb: 'yes'
+    print_time: 0
+  s_opts:
+    print_level: 0
+    max_cpu_time: 4.0
+
+### SIMULATION PARAMS
+sim:
+  t_max: 5000               # Shorter simulation for demo
+  steps: 4
+  planner_timeout: 5.0
+anim:
+  save: true                # Save animation to file
+  fps: 30
+  show: false               # Don't show live (faster)
+  plot_steps: 2             # More frequent updates for smoother animation
+  inf_stream: true
+  move_yaxis_threshold: 10
+goal_offset: 20
+
+### SHIP MODEL AND CONTROLLER PARAMS
+ship:
+  spawn_padding: 30
+  goal_pos: [280, 280]
+  start_pos: [30.0, 0.0, 1.5707963267948966]  # Start pointing up
+  mass: 6000000
+  padding: 0.0
+  vertices: [[43.1, 0.0],
+             [35.4, 4.0],
+             [27.5, 6.5],
+             [11.6, 9.0],
+             [-33.1, 9.0],
+             [-33.1, -9.0],
+             [11.6, -9.0],
+             [27.5, -6.5],
+             [35.4, -4.0]]
+sim_dynamics:
+  vessel_model: 'AISship'
+  dt: 0.02
+  target_speed: 3.0         # Faster speed for more impacts
+  max_acceleration: 0.06
+  track_time: 20
+  seamap_path: "data/ecco4_x0.pth"
+  seanet_path: "data/seanet.pth"

@@ -34,13 +34,16 @@ from ship_ice_planner.geometry.utils import get_global_obs_coords
 from ship_ice_planner.utils.plot import Plot
 from ship_ice_planner.utils.utils import DotDict
 from ship_ice_planner.utils.sim_utils import *
-from ship_ice_planner.utils.sim_utils import load_real_obstacles
+from ship_ice_planner.utils.sim_utils import load_real_obstacles, ICE_THICKNESS
 from ship_ice_planner.utils.ice_fracture_ridge import (
     IceFloeState, RidgeZone, FRACTURE_ENABLED, RIDGING_ENABLED,
     fracture_ice_floe, check_ridging_conditions, create_ridge_zone,
     compute_ridge_resistance, compute_compression_force,
     RIDGE_MIN_FLOES, RIDGE_ACCUMULATION_RATE,
-    RIDGE_DECAY_TIME, RIDGE_MIN_ACTIVITY_DISTANCE
+    RIDGE_DECAY_TIME, RIDGE_MIN_ACTIVITY_DISTANCE,
+    # SubZero-style stress-based fracturing
+    grind_corners, check_yield_criterion,
+    STRESS_HISTORY_SIZE, NUM_VORONOI_PIECES
 )
 
 # global vars for dir/file names
@@ -69,7 +72,7 @@ def sim(
         cfg.cfg_file = cfg_file
 
     if cfg.output_dir:
-        os.makedirs(cfg.output_dir)
+        os.makedirs(cfg.output_dir, exist_ok=True)
 
     # multiprocessing setup
     queue = Queue(maxsize=1)  # LIFO queue to send state information to planner
@@ -159,22 +162,83 @@ def sim(
         # find the impact locations in the local coordinates of the ship
         # see https://stackoverflow.com/a/78017626 and run demo below to understand contact points
         # https://github.com/viblo/pymunk/blob/master/pymunk/examples/collisions.py
+        contact_point_world = None
         if len(arbiter.contact_point_set.points) == 2:  # max 2 contact points
             # take the average
             c1, c2 = arbiter.contact_point_set.points
-            contact_pts.append(list(ship_shape.body.world_to_local((c1.point_b + c2.point_b) / 2)))
+            contact_point_world = (c1.point_b + c2.point_b) / 2
+            contact_pts.append(list(ship_shape.body.world_to_local(contact_point_world)))
         else:
             c1 = arbiter.contact_point_set.points[0]
+            contact_point_world = c1.point_b
             contact_pts.append(list(ship_shape.body.world_to_local(c1.point_b)))
         
-        # Track impulse for fracturing
+        # Track impulse and stress for fracturing
         if FRACTURE_ENABLED and ice_shape.idx in ice_floe_states:
             impulse_magnitude = np.linalg.norm(arbiter.total_impulse)
             ice_state = ice_floe_states[ice_shape.idx]
+            
+            # Legacy impulse tracking
             ice_state.add_impulse(impulse_magnitude)
             
-            # Check if floe should fracture (defer to end of step to avoid modifying during collision)
-            # We'll check this after the physics step
+            # SubZero-style stress tensor tracking
+            # Record interaction: force and contact position
+            # SubZero uses forces; Pymunk reports impulse per physics substep.
+            # Approximate average contact force during this substep: F ≈ J / Δt_sub.
+            dt_sub = dt / steps
+            if dt_sub <= 0:
+                dt_sub = dt
+            force = (arbiter.total_impulse.x / dt_sub, arbiter.total_impulse.y / dt_sub)
+            contact_pos = (contact_point_world.x, contact_point_world.y)
+            ice_state.add_interaction(force, contact_pos)
+
+            # NOTE: We intentionally do NOT track "corner contacts" from ship impacts.
+            # SubZero's corner grinding is driven by floe-floe interactions; applying it to ship-hull
+            # contacts causes unrealistic continuous chipping along the hull.
+
+    def ice_ice_post_solve_handler(arbiter, space, data):
+        """
+        Track floe-floe corner contacts for SubZero-style corner grinding.
+
+        SubZero's corners.m/frac_corner.m operates on floes grinding against other floes.
+        """
+        nonlocal ice_floe_states
+        shape_a, shape_b = arbiter.shapes
+
+        # Only consider ice floes that we track
+        if not (hasattr(shape_a, 'idx') and hasattr(shape_b, 'idx')):
+            return
+        if shape_a.idx not in ice_floe_states or shape_b.idx not in ice_floe_states:
+            return
+
+        # Determine a representative world contact point
+        cps = arbiter.contact_point_set.points
+        if not cps:
+            return
+        if len(cps) == 2:
+            c1, c2 = cps
+            contact_world = (c1.point_a + c2.point_a) / 2
+        else:
+            contact_world = cps[0].point_a
+
+        def _track_nearest_vertex(shape, ice_state):
+            verts = shape.get_vertices()
+            if not verts:
+                return
+            min_dist = float('inf')
+            min_idx = 0
+            for vi, v in enumerate(verts):
+                world_v = shape.body.local_to_world(v)
+                dist = (world_v - contact_world).length
+                if dist < min_dist:
+                    min_dist = dist
+                    min_idx = vi
+            # Require contact to be very near a vertex to count as "corner" grinding.
+            if min_dist < 1.0:
+                ice_state.add_corner_contact(min_idx, (contact_world.x, contact_world.y))
+
+        _track_nearest_vertex(shape_a, ice_floe_states[shape_a.idx])
+        _track_nearest_vertex(shape_b, ice_floe_states[shape_b.idx])
 
     # Register collision handlers for ship (type 1) vs ice (type 2) collisions
     space.on_collision(
@@ -182,6 +246,13 @@ def sim(
         collision_type_b=2,
         pre_solve=pre_solve_handler,
         post_solve=post_solve_handler
+    )
+
+    # Register collision handler for ice (type 2) vs ice (type 2) collisions (corner grinding)
+    space.on_collision(
+        collision_type_a=2,
+        collision_type_b=2,
+        post_solve=ice_ice_post_solve_handler
     )
 
     # init pymunk physics objects
@@ -219,10 +290,10 @@ def sim(
         original_vertices_map[idx] = local_verts
         p.idx = idx
         
-        # Initialize ice floe state for fracturing
+        # Initialize ice floe state for fracturing (with thickness for stress calculation)
         if FRACTURE_ENABLED:
             floe_area = poly_area(local_verts)
-            ice_floe_states[p.idx] = IceFloeState(p, floe_area)
+            ice_floe_states[p.idx] = IceFloeState(p, floe_area, thickness=ICE_THICKNESS)
     
     floe_masses = np.array([poly.mass for poly in polygons])  # may differ slightly from the mass in the exp config
     
@@ -552,11 +623,13 @@ def sim(
                         # in the sim, these are reversed! so for plotting purposes flip the sign
                     )
 
-                    plot.animate_sim()
+                    plot.animate_sim(save_fig_dir=save_fig_dir, suffix=iteration)
                 except Exception as e:
                     # Don't let visualization errors stop the simulation
+                    print(f"Visualization error: {e}")
                     if debug:
-                        print(f"Visualization error (non-fatal): {e}")
+                        import traceback
+                        traceback.print_exc()
                     pass
 
             # simulate ship dynamics
@@ -568,25 +641,81 @@ def sim(
 
             # Check for fracturing BEFORE applying drag (to avoid shape mismatches)
             if FRACTURE_ENABLED:
-                floes_to_fracture = []
+                # ===== SubZero-style stress update =====
+                # Update stress tensors for all floes that had interactions this timestep
                 for idx, ice_state in list(ice_floe_states.items()):
-                    if ice_state.should_fracture():
-                        # Find the shape
-                        ice_shape = None
-                        for poly in polygons:
-                            if hasattr(poly, 'idx') and poly.idx == idx:
-                                ice_shape = poly
-                                break
-                        if ice_shape:
-                            floes_to_fracture.append((ice_shape, ice_state))
+                    # Find the shape to get its position
+                    ice_shape = None
+                    for poly in polygons:
+                        if hasattr(poly, 'idx') and poly.idx == idx:
+                            ice_shape = poly
+                            break
+                    
+                    # Update stress tensor from accumulated interactions.
+                    # Also push zeros through the history for recently-active floes so stress decays
+                    # after contacts stop (matches SubZero's per-timestep StressH update + mean).
+                    if ice_shape and (len(ice_state.interactions) > 0 or ice_state.stress_count > 0):
+                        center_pos = ice_shape.body.position
+                        ice_state.update_stress_from_interactions(center_pos.x, center_pos.y)
                 
-                # Fracture floes
+                # ===== Check for fracturing =====
+                floes_to_fracture = []
+                floes_to_grind = []  # For corner grinding
+                
+                for idx, ice_state in list(ice_floe_states.items()):
+                    # Find the shape
+                    ice_shape = None
+                    for poly in polygons:
+                        if hasattr(poly, 'idx') and poly.idx == idx:
+                            ice_shape = poly
+                            break
+                    
+                    if ice_shape:
+                        # Check both impulse-based and stress-based criteria
+                        should_fracture_impulse = ice_state.should_fracture()
+                        should_fracture_stress = ice_state.should_fracture_stress(
+                            yield_type='mohr',
+                            min_area=np.pi * 2.0 ** 2  # Min area for fracturing
+                        )
+                        
+                        if should_fracture_impulse or should_fracture_stress:
+                            floes_to_fracture.append((ice_shape, ice_state))
+                        elif len(ice_state.corner_contacts) > 0:
+                            # Candidate for corner grinding
+                            floes_to_grind.append((ice_shape, ice_state))
+                
+                # ===== Corner grinding (SubZero-style) =====
+                for ice_shape, ice_state in floes_to_grind:
+                    # Get contact vertex indices
+                    contact_indices = [c[0] for c in ice_state.corner_contacts]
+                    
+                    # Apply corner grinding
+                    updated_shape, fragments, next_floe_idx = grind_corners(
+                        space, ice_shape, ice_state, ice_floe_states,
+                        contact_indices, next_floe_idx
+                    )
+                    
+                    if fragments:
+                        # Update polygon list if shape changed
+                        if updated_shape != ice_shape:
+                            polygons = [p for p in polygons if not hasattr(p, 'idx') or p.idx != ice_shape.idx]
+                            polygons.append(updated_shape)
+                        polygons.extend(fragments)
+                    
+                    # Clear corner contacts for next timestep
+                    ice_state.clear_corner_contacts()
+                
+                # ===== Full fracture =====
                 for ice_shape, ice_state in floes_to_fracture:
                     # Record fracture event before fracturing
                     fracture_pos = ice_shape.body.position
                     fracture_impulse = ice_state.cumulative_impulse
                     
-                    new_floes, next_floe_idx = fracture_ice_floe(space, ice_shape, ice_state, ice_floe_states, next_floe_idx)
+                    # Use Voronoi tessellation (SubZero approach)
+                    new_floes, next_floe_idx = fracture_ice_floe(
+                        space, ice_shape, ice_state, ice_floe_states, next_floe_idx,
+                        use_voronoi=True
+                    )
                     
                     if new_floes:
                         # Track fracture event
@@ -597,6 +726,8 @@ def sim(
                             'x': fracture_pos.x,
                             'y': fracture_pos.y,
                             'impulse': fracture_impulse,
+                            'principal_stress_1': ice_state.principal_stress_1,
+                            'principal_stress_2': ice_state.principal_stress_2,
                             'num_pieces': len(new_floes),
                             'num_floes': current_floe_count + len(new_floes) - 1  # Current count + new - old
                         })
@@ -611,7 +742,7 @@ def sim(
                         batched_data = np.asarray(
                             list(memoryview(buffer_get_body.float_buf()).cast('d'))[batch_dim_get_body:]
                         ).reshape(-1, batch_dim_get_body)
-                        
+                
                         # Update poly_vertices, floe_masses, and sqrt_floe_areas
                         # Match polygons to batched_data order by position to prevent visualization glitches
                         # Use original_vertices_map for unfractured floes, Pymunk vertices for new fractured floes
@@ -696,6 +827,10 @@ def sim(
                                 )
                             floe_masses = np.array([poly.mass for poly in ice_polygons_only])
                             sqrt_floe_areas = np.array([math.sqrt(poly_area(list_vec2d_to_numpy(p.get_vertices()))) for p in ice_polygons_only])
+                
+                # Clear corner contacts for all floes at end of timestep
+                for ice_state in ice_floe_states.values():
+                    ice_state.clear_corner_contacts()
 
             # apply forces on ice floes
             # Ensure shapes match before applying drag
